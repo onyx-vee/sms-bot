@@ -1,33 +1,68 @@
 require("dotenv").config();
 const express = require("express");
+const axios = require("axios");
 const OpenAI = require("openai");
-const twilio = require("twilio");
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 
-// OpenAI
+// OpenAI setup
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Twilio
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// 📩 SEND MESSAGE FUNCTION (Sendblue - FINAL AUTH FIX)
+async function sendMessage(to, message) {
+  try {
+    const response = await axios.post(
+      "https://api.sendblue.co/api/send-message",
+      {
+        number: to, // correct field for this endpoint
+        content: message,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER,
+      },
+      {
+        headers: {
+          "SB-API-KEY-ID": process.env.SENDBLUE_API_KEY_ID,
+          "SB-API-SECRET-KEY": process.env.SENDBLUE_API_SECRET_KEY,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
-// Health check
+    console.log("✅ Send success:", response.data);
+  } catch (error) {
+    console.error("❌ Sendblue ERROR:");
+    console.error(error.response?.data || error.message);
+  }
+}
+
+// 🧪 TEST ROUTE
+app.get("/test", async (req, res) => {
+  console.log("KEY ID:", process.env.SENDBLUE_API_KEY_ID);
+  console.log("SECRET:", process.env.SENDBLUE_API_SECRET_KEY);
+  console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
+
+  try {
+    await sendMessage("+18184222168", "Test message from Onyx 🚀");
+    res.send("Test sent");
+  } catch (err) {
+    console.error(err);
+    res.send("Error sending test");
+  }
+});
+
+// 🏠 HEALTH CHECK
 app.get("/", (req, res) => {
-  res.send("Twilio bot live 🚀");
+  res.send("Bot is live 🚀");
 });
 
 // 📩 MAIN WEBHOOK
 app.post("/sms", async (req, res) => {
-  const incomingMsg = req.body.Body;
-  const from = req.body.From;
+  console.log("Incoming:", req.body);
 
-  console.log("Incoming:", incomingMsg, "from:", from);
+  const incomingMsg = req.body.content;
+  const from = req.body.number;
 
   try {
     const aiResponse = await openai.chat.completions.create({
@@ -47,19 +82,16 @@ app.post("/sms", async (req, res) => {
 
     const reply = aiResponse.choices[0].message.content;
 
-    await client.messages.create({
-      body: reply,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: from,
-    });
+    await sendMessage(from, reply);
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("ERROR:", err);
+    console.error("❌ AI ERROR:", err);
     res.sendStatus(200);
   }
 });
 
+// 🚀 START SERVER
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
