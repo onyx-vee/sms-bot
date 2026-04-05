@@ -26,17 +26,17 @@ async function sendMessage(to, message) {
   );
 }
 
-// 🧠 DETECTION
-function hasNumber(msg) {
+// DETECTION
+function hasCar(msg) {
+  return msg.match(/bmw|m340|m3|m4|tacoma|toyota|mercedes|tesla|audi|lexus/);
+}
+
+function hasBudget(msg) {
   return msg.match(/\d{3,4}/);
 }
 
-function hasCar(msg) {
-  return msg.match(/bmw|m340|m3|m4|tacoma|toyota|mercedes|c300|tesla|audi|lexus/);
-}
-
-function isReadyNow(msg) {
-  return msg.match(/now|im free|ready|lets do it|call now/);
+function wantsToMoveForward(msg) {
+  return msg.match(/lock|deal|yes|do it|ready/);
 }
 
 // 📩 MAIN
@@ -46,54 +46,66 @@ app.post("/sms", async (req, res) => {
 
   if (!leads[from]) {
     leads[from] = {
+      stage: "start",
       car: null,
       budget: null,
-      ready: false,
     };
   }
 
   const lead = leads[from];
 
-  // STORE DATA
-  if (!lead.car && hasCar(msg)) {
-    lead.car = msg;
-  }
-
-  if (!lead.budget && hasNumber(msg)) {
-    lead.budget = msg;
-  }
-
-  if (isReadyNow(msg)) {
-    lead.ready = true;
-  }
-
   let reply;
 
-  // FLOW
+  // 🔥 STATE MACHINE
 
-  if (!lead.car) {
-    reply = "What car are you looking for?";
-  }
+  switch (lead.stage) {
 
-  else if (!lead.budget) {
-    reply = `Got it—what monthly are you trying to stay around for that?`;
-  }
+    case "start":
+      reply = "What car are you looking for?";
+      lead.stage = "car";
+      break;
 
-  // 🔥 IF THEY ASK PRICING
-  else if (msg.includes("price") || msg.includes("pricing")) {
-    reply = `M340s are usually in the ${lead.budget}–$750 range depending on spec. I can get you the best deal available—want me to pull options for you?`;
-  }
+    case "car":
+      if (hasCar(msg)) {
+        lead.car = msg;
+        reply = "Got it—what monthly are you trying to stay around?";
+        lead.stage = "budget";
+      } else {
+        reply = "Which car are you looking for?";
+      }
+      break;
 
-  // 🔥 IF THEY ARE READY → HARD CLOSE
-  else if (lead.ready) {
-    reply = `Perfect—call me right now and I’ll lock this in for you.
+    case "budget":
+      if (hasBudget(msg)) {
+        lead.budget = msg;
+        reply = `Perfect. I can work with that.
+
+Want me to lock something in or show you a couple solid options?`;
+        lead.stage = "close";
+      } else {
+        reply = "What monthly payment are you trying to stay around?";
+      }
+      break;
+
+    case "close":
+      if (wantsToMoveForward(msg)) {
+        reply = `Perfect—call me right now and I’ll lock it in.
 
 📞 818-422-2168`;
-  }
+        lead.stage = "done";
+      } else {
+        reply = "Do you want me to lock something in or show options?";
+      }
+      break;
 
-  // 🔥 DEFAULT CLOSE PUSH
-  else {
-    reply = `I can get you a solid deal on that. Want me to line up options or lock something in for you?`;
+    case "done":
+      reply = `Call me and I’ll take care of everything.
+
+📞 818-422-2168`;
+      break;
+
+    default:
+      reply = "What car are you looking for?";
   }
 
   await sendMessage(from, reply);
@@ -102,5 +114,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("Closer bot running 🚀");
+  console.log("State machine bot running 🚀");
 });
