@@ -11,20 +11,20 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (Sendblue with Basic Auth)
+// 📩 SEND MESSAGE FUNCTION (Sendblue - FIXED)
 async function sendMessage(to, message) {
   try {
     const response = await axios.post(
       "https://api.sendblue.co/api/send-message",
       {
-        number: to,
+        to_number: to, // ✅ FIXED FIELD
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
       },
       {
         auth: {
           username: process.env.SENDBLUE_API_KEY,
-          password: "", // required but left blank
+          password: "",
         },
       }
     );
@@ -55,7 +55,7 @@ app.get("/", (req, res) => {
   res.send("Bot is live 🚀");
 });
 
-// 📩 MAIN WEBHOOK (for Sendblue incoming messages)
+// 📩 MAIN WEBHOOK
 app.post("/sms", async (req, res) => {
   console.log("Incoming:", req.body);
 
