@@ -11,19 +11,19 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (CORRECT SENDBLUE VERSION)
+// 📩 SEND MESSAGE FUNCTION (FINAL FIX)
 async function sendMessage(to, message) {
   try {
     const response = await axios.post(
       "https://api.sendblue.co/api/send-message",
       {
-        to_number: to, // ✅ correct field
+        to_number: to, // correct field
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
       },
       {
         headers: {
-          "sb-api-key": process.env.SENDBLUE_API_KEY, // ✅ correct auth
+          "api-key": process.env.SENDBLUE_API_KEY, // ✅ correct auth header
           "Content-Type": "application/json",
         },
       }
