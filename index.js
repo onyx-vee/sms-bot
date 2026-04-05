@@ -6,26 +6,21 @@ const OpenAI = require("openai");
 const app = express();
 app.use(express.json());
 
-// OpenAI setup
+// OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (FINAL FIX)
+// 📩 SEND MESSAGE (Sendblue - BODY AUTH)
 async function sendMessage(to, message) {
   try {
     const response = await axios.post(
       "https://api.sendblue.co/api/send-message",
       {
-        to_number: to, // correct field
+        api_key: process.env.SENDBLUE_API_KEY, // ✅ KEY IN BODY
+        to_number: to,
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
-      },
-      {
-        headers: {
-          "api-key": process.env.SENDBLUE_API_KEY, // ✅ correct auth header
-          "Content-Type": "application/json",
-        },
       }
     );
 
@@ -39,7 +34,6 @@ async function sendMessage(to, message) {
 // 🧪 TEST ROUTE
 app.get("/test", async (req, res) => {
   console.log("API KEY:", process.env.SENDBLUE_API_KEY);
-  console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
 
   try {
     await sendMessage("+18184222168", "Test message from Onyx 🚀");
@@ -50,12 +44,12 @@ app.get("/test", async (req, res) => {
   }
 });
 
-// 🏠 HEALTH CHECK
+// 🏠 HEALTH
 app.get("/", (req, res) => {
   res.send("Bot is live 🚀");
 });
 
-// 📩 MAIN WEBHOOK
+// 📩 WEBHOOK
 app.post("/sms", async (req, res) => {
   console.log("Incoming:", req.body);
 
@@ -69,7 +63,7 @@ app.post("/sms", async (req, res) => {
         {
           role: "system",
           content:
-            "You are a premium car leasing broker from Onyx Auto Collection. Keep replies short, confident, and helpful.",
+            "You are a premium car leasing broker from Onyx Auto Collection. Keep replies short and confident.",
         },
         {
           role: "user",
@@ -89,7 +83,6 @@ app.post("/sms", async (req, res) => {
   }
 });
 
-// 🚀 START SERVER
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
