@@ -11,30 +11,32 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (Sendblue)
+// 📩 SEND MESSAGE FUNCTION (Sendblue with Basic Auth)
 async function sendMessage(to, message) {
   try {
-    const response = await axios({
-      method: "post",
-      url: "https://api.sendblue.co/api/send-message",
-      headers: {
-        "sb-api-key": process.env.SENDBLUE_API_KEY,
-      },
-      data: {
+    const response = await axios.post(
+      "https://api.sendblue.co/api/send-message",
+      {
         number: to,
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
       },
-    });
+      {
+        auth: {
+          username: process.env.SENDBLUE_API_KEY,
+          password: "", // required but left blank
+        },
+      }
+    );
 
-    console.log("Send success:", response.data);
+    console.log("✅ Send success:", response.data);
   } catch (error) {
     console.error("❌ Sendblue ERROR:");
     console.error(error.response?.data || error.message);
   }
 }
 
-// 🧪 TEST ROUTE (VERY IMPORTANT)
+// 🧪 TEST ROUTE
 app.get("/test", async (req, res) => {
   console.log("API KEY:", process.env.SENDBLUE_API_KEY);
   console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
@@ -53,7 +55,7 @@ app.get("/", (req, res) => {
   res.send("Bot is live 🚀");
 });
 
-// 📩 MAIN WEBHOOK
+// 📩 MAIN WEBHOOK (for Sendblue incoming messages)
 app.post("/sms", async (req, res) => {
   console.log("Incoming:", req.body);
 
