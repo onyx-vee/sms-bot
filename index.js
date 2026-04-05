@@ -11,20 +11,19 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (Sendblue - Basic Auth with KEY + SECRET)
+// 📩 SEND MESSAGE FUNCTION (FINAL FIX)
 async function sendMessage(to, message) {
   try {
     const response = await axios.post(
-      "https://api.sendblue.co/api/send-message",
+      "https://api.sendblue.co/api/send-message/", // ✅ trailing slash
       {
-        to_number: to,
+        number: to, // ✅ correct field
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
       },
       {
-        auth: {
-          username: process.env.SENDBLUE_API_KEY,
-          password: process.env.SENDBLUE_API_SECRET, // 🔥 required
+        headers: {
+          "sb-api-key": process.env.SENDBLUE_API_KEY, // ✅ correct header
         },
       }
     );
@@ -39,11 +38,10 @@ async function sendMessage(to, message) {
 // 🧪 TEST ROUTE
 app.get("/test", async (req, res) => {
   console.log("API KEY:", process.env.SENDBLUE_API_KEY);
-  console.log("API SECRET:", process.env.SENDBLUE_API_SECRET);
   console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
 
   try {
-    await sendMessage("+1YOURNUMBER", "Test message from Onyx 🚀");
+    await sendMessage("+18184222168", "Test message from Onyx 🚀");
     res.send("Test sent");
   } catch (err) {
     console.error(err);
