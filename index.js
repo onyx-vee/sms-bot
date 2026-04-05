@@ -6,18 +6,18 @@ const OpenAI = require("openai");
 const app = express();
 app.use(express.json());
 
-// OpenAI setup
+// OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (Sendblue - FINAL AUTH FIX)
+// 📩 SEND MESSAGE FUNCTION (FINAL CORRECT VERSION)
 async function sendMessage(to, message) {
   try {
     const response = await axios.post(
       "https://api.sendblue.co/api/send-message",
       {
-        number: to, // correct field for this endpoint
+        number: to,
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
       },
@@ -40,7 +40,7 @@ async function sendMessage(to, message) {
 // 🧪 TEST ROUTE
 app.get("/test", async (req, res) => {
   console.log("KEY ID:", process.env.SENDBLUE_API_KEY_ID);
-  console.log("SECRET:", process.env.SENDBLUE_API_SECRET_KEY);
+  console.log("SECRET KEY:", process.env.SENDBLUE_API_SECRET_KEY);
   console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
 
   try {
