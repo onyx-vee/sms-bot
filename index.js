@@ -7,7 +7,7 @@ app.use(express.json());
 
 const leads = {};
 
-// 📩 SEND MESSAGE
+// 📩 SEND
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -20,92 +20,86 @@ async function sendMessage(to, message) {
       headers: {
         "SB-API-KEY-ID": process.env.SENDBLUE_API_KEY_ID,
         "SB-API-SECRET-KEY": process.env.SENDBLUE_API_SECRET_KEY,
-        "Content-Type": "application/json",
       },
     }
   );
 }
 
-// DETECTION
-function hasCar(msg) {
-  return msg.match(/bmw|m340|m3|m4|tacoma|toyota|mercedes|tesla|audi|lexus/);
-}
+// 🧠 DETECTION
+const hasCar = (msg) =>
+  /bmw|m340|tacoma|toyota|mercedes|tesla|audi|lexus/i.test(msg);
 
-function hasBudget(msg) {
-  return msg.match(/\d{3,4}/);
-}
+const hasBudget = (msg) =>
+  /\d{3,4}/.test(msg);
 
-function wantsToMoveForward(msg) {
-  return msg.match(/lock|deal|yes|do it|ready/);
-}
+const wantsOptions = (msg) =>
+  /options|cars|what do you have|show/i.test(msg);
+
+const wantsClose = (msg) =>
+  /lock|deal|ready|lets do it|yes/i.test(msg);
+
+const resetIntent = (msg) =>
+  /start over|restart|hello|hi/i.test(msg);
 
 // 📩 MAIN
 app.post("/sms", async (req, res) => {
   const msg = req.body.content.toLowerCase();
   const from = req.body.number;
 
-  if (!leads[from]) {
+  // RESET LOGIC 🔥
+  if (resetIntent(msg)) {
     leads[from] = {
-      stage: "start",
       car: null,
       budget: null,
     };
+
+    await sendMessage(from, "What car are you looking for?");
+    return res.sendStatus(200);
+  }
+
+  if (!leads[from]) {
+    leads[from] = { car: null, budget: null };
   }
 
   const lead = leads[from];
 
+  // STORE DATA
+  if (!lead.car && hasCar(msg)) {
+    lead.car = msg;
+  }
+
+  if (!lead.budget && hasBudget(msg)) {
+    lead.budget = msg;
+  }
+
   let reply;
 
-  // 🔥 STATE MACHINE
+  // 🔥 INTENT OVERRIDES FIRST (THIS FIXES EVERYTHING)
 
-  switch (lead.stage) {
+  if (wantsOptions(msg)) {
+    reply = `Got you—what car are you leaning toward and I’ll show you the best options under your budget.`;
+  }
 
-    case "start":
-      reply = "What car are you looking for?";
-      lead.stage = "car";
-      break;
-
-    case "car":
-      if (hasCar(msg)) {
-        lead.car = msg;
-        reply = "Got it—what monthly are you trying to stay around?";
-        lead.stage = "budget";
-      } else {
-        reply = "Which car are you looking for?";
-      }
-      break;
-
-    case "budget":
-      if (hasBudget(msg)) {
-        lead.budget = msg;
-        reply = `Perfect. I can work with that.
-
-Want me to lock something in or show you a couple solid options?`;
-        lead.stage = "close";
-      } else {
-        reply = "What monthly payment are you trying to stay around?";
-      }
-      break;
-
-    case "close":
-      if (wantsToMoveForward(msg)) {
-        reply = `Perfect—call me right now and I’ll lock it in.
+  else if (wantsClose(msg)) {
+    reply = `Perfect—call me right now and I’ll lock it in for you.
 
 📞 818-422-2168`;
-        lead.stage = "done";
-      } else {
-        reply = "Do you want me to lock something in or show options?";
-      }
-      break;
+  }
 
-    case "done":
-      reply = `Call me and I’ll take care of everything.
+  // 🔁 NORMAL FLOW
 
-📞 818-422-2168`;
-      break;
+  else if (!lead.car) {
+    reply = "What car are you looking for?";
+  }
 
-    default:
-      reply = "What car are you looking for?";
+  else if (!lead.budget) {
+    reply = `Nice—what monthly are you trying to stay around for the ${lead.car}?`;
+  }
+
+  else {
+    reply = `I can get you a solid deal on that.
+
+Want me to line up options or lock something in?`;
   }
 
   await sendMessage(from, reply);
@@ -114,5 +108,5 @@ Want me to lock something in or show you a couple solid options?`;
 
 // START
 app.listen(3000, () => {
-  console.log("State machine bot running 🚀");
+  console.log("Smart bot running 🚀");
 });
