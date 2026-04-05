@@ -6,27 +6,28 @@ const OpenAI = require("openai");
 const app = express();
 app.use(express.json());
 
-// OpenAI
+// OpenAI setup
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE (FORCED HEADER)
+// 📩 SEND MESSAGE FUNCTION (Sendblue - Basic Auth with KEY + SECRET)
 async function sendMessage(to, message) {
   try {
-    const response = await axios({
-      method: "post",
-      url: "https://api.sendblue.co/api/send-message",
-      headers: {
-        "sb-api-key": `${process.env.SENDBLUE_API_KEY}`, // force string
-        "Content-Type": "application/json",
-      },
-      data: {
+    const response = await axios.post(
+      "https://api.sendblue.co/api/send-message",
+      {
         to_number: to,
         content: message,
         from_number: process.env.SENDBLUE_PHONE_NUMBER,
       },
-    });
+      {
+        auth: {
+          username: process.env.SENDBLUE_API_KEY,
+          password: process.env.SENDBLUE_API_SECRET, // 🔥 required
+        },
+      }
+    );
 
     console.log("✅ Send success:", response.data);
   } catch (error) {
@@ -38,6 +39,7 @@ async function sendMessage(to, message) {
 // 🧪 TEST ROUTE
 app.get("/test", async (req, res) => {
   console.log("API KEY:", process.env.SENDBLUE_API_KEY);
+  console.log("API SECRET:", process.env.SENDBLUE_API_SECRET);
   console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
 
   try {
@@ -49,12 +51,12 @@ app.get("/test", async (req, res) => {
   }
 });
 
-// 🏠 HEALTH
+// 🏠 HEALTH CHECK
 app.get("/", (req, res) => {
   res.send("Bot is live 🚀");
 });
 
-// 📩 WEBHOOK
+// 📩 MAIN WEBHOOK
 app.post("/sms", async (req, res) => {
   console.log("Incoming:", req.body);
 
@@ -68,7 +70,7 @@ app.post("/sms", async (req, res) => {
         {
           role: "system",
           content:
-            "You are a premium car leasing broker from Onyx Auto Collection.",
+            "You are a premium car leasing broker from Onyx Auto Collection. Keep replies short, confident, and helpful.",
         },
         {
           role: "user",
@@ -83,11 +85,12 @@ app.post("/sms", async (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error(err);
+    console.error("❌ AI ERROR:", err);
     res.sendStatus(200);
   }
 });
 
+// 🚀 START SERVER
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
