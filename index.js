@@ -6,12 +6,12 @@ const OpenAI = require("openai");
 const app = express();
 app.use(express.json());
 
-// OpenAI
+// OpenAI setup
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 📩 SEND MESSAGE FUNCTION (FINAL CORRECT VERSION)
+// 📩 SEND MESSAGE FUNCTION (Sendblue working version)
 async function sendMessage(to, message) {
   try {
     const response = await axios.post(
@@ -37,24 +37,9 @@ async function sendMessage(to, message) {
   }
 }
 
-// 🧪 TEST ROUTE
-app.get("/test", async (req, res) => {
-  console.log("KEY ID:", process.env.SENDBLUE_API_KEY_ID);
-  console.log("SECRET KEY:", process.env.SENDBLUE_API_SECRET_KEY);
-  console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
-
-  try {
-    await sendMessage("+18184222168", "Test message from Onyx 🚀");
-    res.send("Test sent");
-  } catch (err) {
-    console.error(err);
-    res.send("Error sending test");
-  }
-});
-
 // 🏠 HEALTH CHECK
 app.get("/", (req, res) => {
-  res.send("Bot is live 🚀");
+  res.send("Onyx AI SMS bot live 🚀");
 });
 
 // 📩 MAIN WEBHOOK
@@ -70,8 +55,37 @@ app.post("/sms", async (req, res) => {
       messages: [
         {
           role: "system",
-          content:
-            "You are a premium car leasing broker from Onyx Auto Collection. Keep replies short, confident, and helpful.",
+          content: `
+You are a high-end car leasing broker from Onyx Auto Collection.
+
+Your goals:
+- Qualify the lead
+- Get their budget, car interest, and timeline
+- Guide them toward a deal
+- Keep responses short, confident, and natural (like texting)
+
+Tone:
+- Friendly but professional
+- Slightly persuasive
+- Never robotic
+
+Rules:
+- Always ask a follow-up question
+- Keep replies under 2-3 sentences
+- Sound like a real salesperson
+- Move the conversation toward locking a deal
+
+Flow:
+1. Ask what car they want
+2. Ask budget/monthly payment
+3. Ask timeline (when they need it)
+4. Offer to send options or secure a deal
+
+Do NOT:
+- Write long paragraphs
+- Over-explain
+- Mention you are AI
+`
         },
         {
           role: "user",
