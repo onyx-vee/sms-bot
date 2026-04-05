@@ -6,37 +6,41 @@ const OpenAI = require("openai");
 const app = express();
 app.use(express.json());
 
-// OpenAI
+// OpenAI setup
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Sendblue send function
+// 📩 SEND MESSAGE FUNCTION (Sendblue)
 async function sendMessage(to, message) {
-  await axios.post(
-    "https://api.sendblue.co/api/send-message",
-    {
-      number: to,
-      content: message,
-      from_number: process.env.SENDBLUE_PHONE_NUMBER,
-    },
-    {
+  try {
+    const response = await axios({
+      method: "post",
+      url: "https://api.sendblue.co/api/send-message",
       headers: {
         "sb-api-key": process.env.SENDBLUE_API_KEY,
-        "Content-Type": "application/json",
       },
-    }
-  );
+      data: {
+        number: to,
+        content: message,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER,
+      },
+    });
+
+    console.log("Send success:", response.data);
+  } catch (error) {
+    console.error("❌ Sendblue ERROR:");
+    console.error(error.response?.data || error.message);
+  }
 }
 
-// Health check
-app.get("/", (req, res) => {
-  res.send("Bot is live 🚀");
-});
-
+// 🧪 TEST ROUTE (VERY IMPORTANT)
 app.get("/test", async (req, res) => {
+  console.log("API KEY:", process.env.SENDBLUE_API_KEY);
+  console.log("PHONE:", process.env.SENDBLUE_PHONE_NUMBER);
+
   try {
-    await sendMessage("YOUR_PHONE_NUMBER", "Test message 🚀");
+    await sendMessage("+18184222168", "Test message from Onyx 🚀");
     res.send("Test sent");
   } catch (err) {
     console.error(err);
@@ -44,7 +48,12 @@ app.get("/test", async (req, res) => {
   }
 });
 
-// MAIN WEBHOOK
+// 🏠 HEALTH CHECK
+app.get("/", (req, res) => {
+  res.send("Bot is live 🚀");
+});
+
+// 📩 MAIN WEBHOOK
 app.post("/sms", async (req, res) => {
   console.log("Incoming:", req.body);
 
@@ -57,7 +66,8 @@ app.post("/sms", async (req, res) => {
       messages: [
         {
           role: "system",
-          content: "You are a car leasing expert from Onyx Auto Collection. Keep replies short and helpful.",
+          content:
+            "You are a premium car leasing broker from Onyx Auto Collection. Keep replies short, confident, and helpful.",
         },
         {
           role: "user",
@@ -72,11 +82,12 @@ app.post("/sms", async (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error(err);
+    console.error("❌ AI ERROR:", err);
     res.sendStatus(200);
   }
 });
 
+// 🚀 START SERVER
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
