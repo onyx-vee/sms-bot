@@ -34,6 +34,16 @@ app.get("/", (req, res) => {
   res.send("Bot is live 🚀");
 });
 
+app.get("/test", async (req, res) => {
+  try {
+    await sendMessage("YOUR_PHONE_NUMBER", "Test message 🚀");
+    res.send("Test sent");
+  } catch (err) {
+    console.error(err);
+    res.send("Error sending test");
+  }
+});
+
 // MAIN WEBHOOK
 app.post("/sms", async (req, res) => {
   console.log("Incoming:", req.body);
