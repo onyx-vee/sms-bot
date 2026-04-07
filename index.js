@@ -14,8 +14,11 @@ const auth = new google.auth.GoogleAuth({
 
 const sheets = google.sheets({ version: "v4", auth });
 
-// 🧠 SESSION MEMORY
+// 🧠 SESSION
 const sessions = {};
+
+const APP_LINK = "https://onyxautocollection.com/1745-2/";
+const PHONE = "818-422-2168";
 
 // 🔥 CLEAN NUMBER
 function cleanNumber(val) {
@@ -23,15 +26,10 @@ function cleanNumber(val) {
   return Number(val.toString().replace(/[^0-9.]/g, ""));
 }
 
-// 🧠 DETECTION
+// 🧠 DETECT
 function extractBudget(msg) {
   const match = msg.match(/\d{3,4}/);
   return match ? Number(match[0]) : null;
-}
-
-function detectBrand(msg) {
-  const brands = ["bmw","audi","mercedes","toyota","lexus","tesla","acura","honda","hyundai"];
-  return brands.find(b => msg.includes(b));
 }
 
 function detectType(msg) {
@@ -41,51 +39,44 @@ function detectType(msg) {
   return null;
 }
 
-function isLuxury(msg) {
-  return /luxury|premium/i.test(msg);
-}
-
 function wantsAll(msg) {
-  return /all|everything|list|more|send it/i.test(msg);
+  return /all|everything|list|more|send it|yes/i.test(msg);
 }
 
-// 🔥 CLASSIFY VEHICLE TYPE FROM MODEL
+function isReady(msg) {
+  return /ready|lets do it|lock it|apply|run it/i.test(msg);
+}
+
+// 🔥 CLASSIFY
 function classifyType(model) {
   const m = model.toLowerCase();
 
-  if (/x\d|rx|nx|crv|rav4|cx|escape|pilot|highlander|kona|tiguan/.test(m)) return "suv";
-  if (/truck|tacoma|f150|silverado|ram/.test(m)) return "truck";
+  if (/x\d|rx|nx|crv|rav4|cx|escape|pilot|highlander|kona|tiguan|qx|cherokee/.test(m)) return "suv";
+  if (/tacoma|f150|silverado|ram|frontier/.test(m)) return "truck";
   return "sedan";
 }
 
-// 🔥 LUXURY BRANDS
-const luxuryBrands = ["bmw","audi","mercedes","lexus"];
-
-// 📊 GET DEALS WITH FILTERING
-async function getDeals(filters) {
+// 📊 GET DATA
+async function getAllRows() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
     range: "Sheet1!A2:F",
   });
+  return res.data.values || [];
+}
 
-  const rows = res.data.values || [];
+// 📊 GET DEALS
+async function getDeals(filters) {
+  const rows = await getAllRows();
   let matches = [];
 
   for (let row of rows) {
-    const make = row[0]?.toLowerCase();
-    const model = row[1]?.toLowerCase();
     const monthly = cleanNumber(row[2]);
+    const model = row[1]?.toLowerCase();
 
     if (!monthly) continue;
-
-    // 🔥 FILTERS
     if (filters.budget && monthly > filters.budget) continue;
-
-    if (filters.brand && !make.includes(filters.brand)) continue;
-
     if (filters.type && classifyType(model) !== filters.type) continue;
-
-    if (filters.luxury && !luxuryBrands.includes(make)) continue;
 
     matches.push({
       make: row[0],
@@ -96,7 +87,6 @@ async function getDeals(filters) {
   }
 
   matches.sort((a, b) => a.monthly - b.monthly);
-
   return matches;
 }
 
@@ -118,6 +108,33 @@ async function sendMessage(to, message) {
   );
 }
 
+// 🔥 FOLLOW-UP ENGINE
+function scheduleFollowUps(user) {
+  const session = sessions[user];
+  const now = Date.now();
+
+  // 15 MIN
+  setTimeout(async () => {
+    if (sessions[user]?.lastReply === now) {
+      await sendMessage(user, "Still want me to line something up for you?");
+    }
+  }, 15 * 60 * 1000);
+
+  // 2 HOURS
+  setTimeout(async () => {
+    if (sessions[user]?.lastReply === now) {
+      await sendMessage(user, "I can lock something in today if timing works.");
+    }
+  }, 2 * 60 * 60 * 1000);
+
+  // NEXT DAY
+  setTimeout(async () => {
+    if (sessions[user]?.lastReply === now) {
+      await sendMessage(user, "Want me to send a couple strong options based on what you were looking at?");
+    }
+  }, 24 * 60 * 60 * 1000);
+}
+
 // 📩 MAIN
 app.post("/sms", async (req, res) => {
   const msg = req.body.content;
@@ -127,48 +144,57 @@ app.post("/sms", async (req, res) => {
   if (!sessions[from]) sessions[from] = {};
   const session = sessions[from];
 
-  // 🔥 DETECT FILTERS
-  const budget = extractBudget(lower);
-  const brand = detectBrand(lower);
-  const type = detectType(lower);
-  const luxury = isLuxury(lower);
+  // 🔥 UPDATE LAST REPLY (STOPS FOLLOWUPS)
+  session.lastReply = Date.now();
 
-  if (budget) session.budget = budget;
-  if (brand) session.brand = brand;
-  if (type) session.type = type;
-  if (luxury) session.luxury = true;
-
-  // 🔥 SHOW ALL
-  if (wantsAll(lower) && session.deals) {
-    const reply = session.deals
-      .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due at signing`)
-      .join("\n");
-
-    await sendMessage(from, reply + `\n\nThat’s everything that fits.`);
+  // 🔥 READY → CLOSE
+  if (isReady(lower)) {
+    await sendMessage(from, `Run the app here and I’ll take it from there:\n${APP_LINK}`);
     return res.sendStatus(200);
   }
 
-  // 🔥 GET DEALS
-  if (session.budget || session.brand || session.type || session.luxury) {
-    const deals = await getDeals(session);
+  // 🔥 FILTERS
+  const budget = extractBudget(lower);
+  const type = detectType(lower);
 
+  if (budget) session.budget = budget;
+  if (type) session.type = type;
+
+  // 🔥 FULL LIST
+  if (wantsAll(lower) && session.deals) {
+    let reply = session.deals
+      .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due`)
+      .join("\n");
+
+    reply += `\n\nIf one makes sense, I can lock it in today.`;
+
+    await sendMessage(from, reply);
+
+    scheduleFollowUps(from);
+    return res.sendStatus(200);
+  }
+
+  // 🔥 DEALS
+  if (session.budget || session.type) {
+    const deals = await getDeals(session);
     session.deals = deals;
 
     if (deals.length > 0) {
       const top3 = deals.slice(0, 3);
 
       let reply = top3
-        .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due at signing`)
+        .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due`)
         .join("\n");
 
       if (deals.length > 3) {
-        reply += `\n\nI’ve got ${deals.length} options like this—want me to send the full list?`;
+        reply += `\n\nI’ve got ${deals.length} options—want the full list?`;
       }
 
+      reply += `\n\nIf one works, I can lock it in today.`;
+
       await sendMessage(from, reply);
-      return res.sendStatus(200);
-    } else {
-      await sendMessage(from, "Nothing solid with that exact combo—but I can adjust it. Want me to take a look?");
+
+      scheduleFollowUps(from);
       return res.sendStatus(200);
     }
   }
@@ -176,16 +202,16 @@ app.post("/sms", async (req, res) => {
   // 🔥 GREETING
   if (!session.started) {
     session.started = true;
-    await sendMessage(from, "Hey—what are you looking to get into?");
+    await sendMessage(from, "What are you looking to get into?");
     return res.sendStatus(200);
   }
 
   // 🔥 FALLBACK
-  await sendMessage(from, "Got you—give me an idea of budget or type and I’ll narrow it down.");
+  await sendMessage(from, "Give me a budget or direction and I’ll line something up.");
   res.sendStatus(200);
 });
 
 // START
 app.listen(3000, () => {
-  console.log("SMART BROKER FILTER SYSTEM 🚀");
+  console.log("AUTO FOLLOW-UP SYSTEM LIVE 🚀");
 });
