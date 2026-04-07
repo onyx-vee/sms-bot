@@ -15,6 +15,12 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
+// 🔥 CLEAN NUMBER FUNCTION
+function cleanNumber(val) {
+  if (!val) return null;
+  return parseInt(val.toString().replace(/[^0-9]/g, ""));
+}
+
 // 📊 GET DEALS (FIXED)
 async function getDeals(query, budget) {
   const res = await sheets.spreadsheets.values.get({
@@ -23,12 +29,15 @@ async function getDeals(query, budget) {
   });
 
   const rows = res.data.values || [];
+
+  console.log("📊 SHEET ROWS:", rows); // DEBUG
+
   let matches = [];
 
   for (let row of rows) {
     const make = row[0]?.toLowerCase();
     const model = row[1]?.toLowerCase();
-    const monthly = parseInt(row[2]);
+    const monthly = cleanNumber(row[2]);
 
     const carMatch =
       query &&
@@ -36,18 +45,20 @@ async function getDeals(query, budget) {
         query.includes(model) ||
         model.includes(query));
 
-    const budgetMatch = budget && monthly <= budget;
+    const budgetMatch = budget && monthly && monthly <= budget;
 
     if (carMatch || budgetMatch) {
       matches.push({
         model: row[1],
-        monthly: row[2],
+        monthly: monthly,
         due: row[3],
         term: row[4],
         miles: row[5],
       });
     }
   }
+
+  console.log("🔥 MATCHES:", matches); // DEBUG
 
   return matches.slice(0, 3);
 }
@@ -82,9 +93,6 @@ const wantsOptions = (msg) =>
 const isReady = (msg) =>
   /ready|lets do it|lock it|im ready|do it/i.test(msg);
 
-const hasZip = (msg) =>
-  /\b\d{5}\b/.test(msg);
-
 // 📩 MAIN
 app.post("/sms", async (req, res) => {
   const msg = req.body.content;
@@ -98,77 +106,34 @@ app.post("/sms", async (req, res) => {
   const lead = leads[from];
   const budget = extractBudget(lower);
 
-  // STORE
-  if (!lead.budget && budget) {
-    lead.budget = budget;
-  }
-
   // 🔥 HARD CLOSE
   if (isReady(lower)) {
     await sendMessage(from, `Perfect—call me now and I’ll lock this in.\n\n818-422-2168`);
     return res.sendStatus(200);
   }
 
-  // 🔥 PRIORITY: DEAL SEARCH (FIXED)
+  // 🔥 DEAL ENGINE (FIXED)
   if (wantsOptions(lower) || budget) {
-    const deals = await getDeals(lead.car || lower, budget);
+    const deals = await getDeals(lower, budget);
 
     if (deals.length > 0) {
       let reply = deals
-        .map(d => `${d.model} — ${d.monthly}/mo, ${d.due} due`)
+        .map(d => `${d.model} — $${d.monthly}/mo, ${d.due} due`)
         .join("\n");
 
       reply += "\n\nThese are the strongest options right now.";
-
-      if (!lead.name) {
-        reply += "\n\nWhat’s your name?";
-        lead.stage = "name";
-      }
 
       await sendMessage(from, reply);
       return res.sendStatus(200);
     }
   }
 
-  // 🔥 FUNNEL (ONLY IF NO INTENT)
-
-  let reply;
-
-  if (lead.stage === "start") {
-    lead.stage = "car";
-    reply = "Hey—what are you looking to get into?";
-  }
-
-  else if (lead.stage === "car") {
-    reply = "What are you thinking?";
-  }
-
-  else if (lead.stage === "name") {
-    lead.name = msg;
-    lead.stage = "zip";
-    reply = `Got you ${lead.name}. What area are you in?`;
-  }
-
-  else if (lead.stage === "zip") {
-    if (hasZip(lower)) {
-      lead.zip = msg;
-
-      reply = `Perfect—I’ll line something up. Call me and we’ll lock it in.\n\n818-422-2168`;
-      lead.stage = "done";
-    } else {
-      reply = "What zip code are you in?";
-    }
-  }
-
-  else {
-    reply = "Hey—what are you looking to get into?";
-  }
-
-  await sendMessage(from, reply);
+  // 🔥 FALLBACK (CLEAN)
+  await sendMessage(from, "Hey—what are you looking to get into?");
   res.sendStatus(200);
 });
 
 // START
 app.listen(3000, () => {
-  console.log("FIXED deal engine running 🚀");
+  console.log("FIXED sheet parsing running 🚀");
 });
