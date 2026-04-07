@@ -9,7 +9,6 @@ app.use(express.json());
 const sessions = {};
 
 const APP_LINK = "https://onyxautocollection.com/1745-2/";
-const PHONE = "818-422-2168";
 
 // 🔑 GOOGLE AUTH
 const auth = new google.auth.GoogleAuth({
@@ -18,7 +17,7 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-// 🔥 CLEAN NUMBER
+// 🔥 HELPERS
 function cleanNumber(val) {
   if (!val) return null;
   return Number(val.toString().replace(/[^0-9.]/g, ""));
@@ -31,7 +30,7 @@ function extractBudget(msg) {
 }
 
 function detectBrand(msg) {
-  const brands = ["toyota","bmw","audi","mercedes","lexus","nissan","honda","mazda"];
+  const brands = ["toyota","bmw","audi","mercedes","lexus","nissan","honda","mazda","hyundai","kia"];
   return brands.find(b => msg.includes(b));
 }
 
@@ -43,7 +42,7 @@ function detectType(msg) {
 }
 
 function detectTerm(msg) {
-  const match = msg.match(/(24|36|39|48)/);
+  const match = msg.match(/(13|18|24|36|39|48)/);
   return match ? match[0] : null;
 }
 
@@ -112,6 +111,41 @@ function handleObjection(type) {
     case "delay":
       return "All good—just keep in mind programs change month to month.";
   }
+}
+
+// 🔥 NEGOTIATION
+function detectNegotiation(msg) {
+  if (/0 down|zero down/.test(msg)) return { type: "zero_down" };
+
+  const match = msg.match(/(\d{3,5})\s?(down|due)/);
+  if (match) return { type: "custom_down", amount: Number(match[1]) };
+
+  if (/lower|better|deal|work with me/.test(msg)) return { type: "improve" };
+
+  return null;
+}
+
+function adjustPayment(deal, newDown) {
+  const currentDown = cleanNumber(deal.due) || 0;
+  const term = deal.term?.toString();
+
+  const rates = {
+    "13": 77,
+    "18": 56,
+    "24": 42,
+    "36": 28,
+    "39": 26,
+    "48": 21,
+  };
+
+  const ratePer1k = rates[term] || 30;
+
+  const diff = newDown - currentDown;
+  const monthlyChange = (diff / 1000) * ratePer1k;
+
+  const newMonthly = Math.round(deal.monthly - monthlyChange);
+
+  return { newMonthly, newDown };
 }
 
 // 🔥 TYPE CLASSIFIER
@@ -215,15 +249,17 @@ app.post("/sms", async (req, res) => {
   const from = req.body.number;
 
   if (!sessions[from]) sessions[from] = {};
-  const session = sessions[from;
+  const session = sessions[from];
 
   session.lastReply = Date.now();
   session.f1 = session.f2 = session.f3 = false;
 
+  const personality = detectPersonality(msg);
+
   // OBJECTION
   const objection = detectObjection(msg);
   if (objection) {
-    return sendMessage(from, handleObjection(objection));
+    return sendMessage(from, formatResponse(handleObjection(objection), personality));
   }
 
   // CLOSE
@@ -245,17 +281,38 @@ app.post("/sms", async (req, res) => {
   if (miles) session.miles = miles;
 
   const deals = await getDeals(session);
+  session.deals = deals;
+
+  // NEGOTIATION
+  const negotiation = detectNegotiation(msg);
+  if (negotiation && deals.length) {
+    const deal = deals[0];
+
+    if (negotiation.type === "zero_down") {
+      const r = adjustPayment(deal, 0);
+      return sendMessage(from, `${deal.make} ${deal.model}\n\n$0 down → ~$${r.newMonthly}/mo (${deal.term} mo)`);
+    }
+
+    if (negotiation.type === "custom_down") {
+      const r = adjustPayment(deal, negotiation.amount);
+      return sendMessage(from, `${deal.make} ${deal.model}\n\n$${negotiation.amount} down → ~$${r.newMonthly}/mo`);
+    }
+
+    if (negotiation.type === "improve") {
+      return sendMessage(from, `${deal.make} ${deal.model}\n\nI can tighten this up—want me to structure it better?`);
+    }
+  }
 
   // BEST
   if (isBest(msg) && deals.length) {
     const best = deals[0];
-    return sendMessage(from, `${best.make} ${best.model} — $${best.monthly}/mo`);
+    return sendMessage(from, formatResponse(`${best.make} ${best.model} — $${best.monthly}/mo`, personality));
   }
 
-  // CHEAPEST (CONTEXT)
+  // CHEAPEST
   if (isCheapest(msg) && deals.length) {
     const d = deals[0];
-    return sendMessage(from, `${d.make} ${d.model} — $${d.monthly}/mo`);
+    return sendMessage(from, formatResponse(`${d.make} ${d.model} — $${d.monthly}/mo`, personality));
   }
 
   // DEAL LIST
@@ -266,7 +323,7 @@ app.post("/sms", async (req, res) => {
       `${d.make} ${d.model} — $${d.monthly}/mo (${d.term}mo / ${d.miles})`
     ).join("\n");
 
-    return sendMessage(from, formatResponse(reply, detectPersonality(msg)));
+    return sendMessage(from, formatResponse(reply, personality));
   }
 
   // GREETING
@@ -280,5 +337,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("FINAL SALES SYSTEM LIVE 🚀");
+  console.log("ELITE BROKER SYSTEM LIVE 🚀");
 });
