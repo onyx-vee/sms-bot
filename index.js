@@ -7,8 +7,6 @@ const { google } = require("googleapis");
 const app = express();
 app.use(express.json());
 
-const leads = {};
-
 // 🔑 OPENAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -25,18 +23,37 @@ const sheets = google.sheets({ version: "v4", auth });
 // 🔥 CLEAN NUMBER
 function cleanNumber(val) {
   if (!val) return null;
-  return parseInt(val.toString().replace(/[^0-9]/g, ""));
+  return Number(val.toString().replace(/[^0-9.]/g, ""));
 }
 
-// 📊 GET DEALS (FIXED LOGIC)
-async function getDeals(query, budget) {
+// 🧠 DETECT
+function extractBudget(msg) {
+  const match = msg.match(/\d{3,4}/);
+  return match ? Number(match[0]) : null;
+}
+
+function extractCar(msg) {
+  const keywords = [
+    "bmw", "330", "m340",
+    "tacoma", "toyota",
+    "tesla", "model 3",
+    "audi", "mercedes", "lexus", "acura"
+  ];
+
+  for (let k of keywords) {
+    if (msg.includes(k)) return k;
+  }
+  return null;
+}
+
+// 📊 GET DEALS (SMART FILTERING)
+async function getDeals(car, budget) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
     range: "Sheet1!A2:F",
   });
 
   const rows = res.data.values || [];
-
   let matches = [];
 
   for (let row of rows) {
@@ -44,25 +61,17 @@ async function getDeals(query, budget) {
     const model = row[1]?.toLowerCase();
     const monthly = cleanNumber(row[2]);
 
-    // 🔥 PRIORITY: BUDGET MATCH
-    if (budget && monthly && monthly <= budget) {
-      matches.push({
-        make: row[0],
-        model: row[1],
-        monthly,
-        due: row[3],
-        term: row[4],
-        miles: row[5],
-      });
-      continue;
-    }
+    const carMatch =
+      car &&
+      (make.includes(car) ||
+        model.includes(car));
 
-    // 🔥 SECONDARY: CAR MATCH
+    const budgetMatch =
+      budget && monthly && monthly <= budget;
+
     if (
-      query &&
-      (query.includes(make) ||
-        query.includes(model) ||
-        model.includes(query))
+      (budget && budgetMatch && (!car || carMatch)) ||
+      (!budget && carMatch)
     ) {
       matches.push({
         make: row[0],
@@ -96,39 +105,29 @@ async function sendMessage(to, message) {
   );
 }
 
-// 🧠 DETECTION
-const extractBudget = (msg) => {
-  const match = msg.match(/\d{3,4}/);
-  return match ? parseInt(match[0]) : null;
-};
-
-const wantsDeals = (msg) =>
-  /what do you have|options|cars|inventory|available|under/i.test(msg);
-
-const isReady = (msg) =>
-  /ready|lets do it|lock it|im ready/i.test(msg);
-
-// 🤖 AI RESPONSE
-async function aiReply(context, userMsg) {
+// 🤖 AI POLISH
+async function aiReply(dealsText, userMsg) {
   const res = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [
       {
         role: "system",
         content: `
-You are a high-end car broker.
+You are a high-end car leasing broker.
 
 Tone:
 - Natural
 - Confident
-- Human
+- Short
 - No fluff
-- Short responses
+- No salesy clichés
+
+You are texting like a real broker.
 `,
       },
       {
         role: "user",
-        content: `Deals:\n${context}\n\nUser: ${userMsg}`,
+        content: `Deals:\n${dealsText}\n\nUser: ${userMsg}`,
       },
     ],
   });
@@ -142,25 +141,16 @@ app.post("/sms", async (req, res) => {
   const lower = msg.toLowerCase();
   const from = req.body.number;
 
-  if (!leads[from]) {
-    leads[from] = { phone: from };
-  }
-
   const budget = extractBudget(lower);
+  const car = extractCar(lower);
 
-  // 🔥 CLOSE
-  if (isReady(lower)) {
-    await sendMessage(from, `Perfect—call me now and I’ll lock it in.\n\n818-422-2168`);
-    return res.sendStatus(200);
-  }
-
-  // 🔥 DEAL ENGINE (NOW ALWAYS WORKS)
-  if (wantsDeals(lower) || budget) {
-    const deals = await getDeals(lower, budget);
+  // 🔥 ALWAYS HANDLE DEAL REQUESTS FIRST
+  if (budget || car) {
+    const deals = await getDeals(car, budget);
 
     if (deals.length > 0) {
-      let dealText = deals
-        .map(d => `${d.model} — $${d.monthly}/mo, ${d.due} due`)
+      const dealText = deals
+        .map(d => `${d.make} ${d.model} — $${d.monthly}/mo, ${d.due} due`)
         .join("\n");
 
       const reply = await aiReply(dealText, msg);
@@ -170,12 +160,19 @@ app.post("/sms", async (req, res) => {
     }
   }
 
-  // 🔥 FALLBACK
-  await sendMessage(from, "Hey—what are you looking to get into?");
+  // 🔥 GREETING (ONLY FIRST MESSAGE)
+  if (!global.started) {
+    global.started = true;
+    await sendMessage(from, "Hey—what are you looking to get into?");
+    return res.sendStatus(200);
+  }
+
+  // 🔥 SAFE FALLBACK (NO LOOP)
+  await sendMessage(from, "Got you—what kind of car are you thinking?");
   res.sendStatus(200);
 });
 
 // START
 app.listen(3000, () => {
-  console.log("FINAL FIXED broker running 🚀");
+  console.log("FINAL STABLE BROKER BOT 🚀");
 });
