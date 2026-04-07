@@ -8,15 +8,14 @@ app.use(express.json());
 
 const leads = {};
 
-// 🔑 GOOGLE AUTH
+// 🔑 GOOGLE
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
-
 const sheets = google.sheets({ version: "v4", auth });
 
-// 📊 GET DEALS (PRICING SHEET)
+// 📊 GET DEALS (FIXED)
 async function getDeals(query, budget) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_PRICING_SHEET_ID,
@@ -31,14 +30,15 @@ async function getDeals(query, budget) {
     const model = row[1]?.toLowerCase();
     const monthly = parseInt(row[2]);
 
-    const match =
+    const carMatch =
       query &&
       (query.includes(make) ||
         query.includes(model) ||
-        model.includes(query) ||
-        (query.includes("330") && model.includes("330")));
+        model.includes(query));
 
-    if (match || (budget && monthly <= budget)) {
+    const budgetMatch = budget && monthly <= budget;
+
+    if (carMatch || budgetMatch) {
       matches.push({
         model: row[1],
         monthly: row[2],
@@ -52,26 +52,7 @@ async function getDeals(query, budget) {
   return matches.slice(0, 3);
 }
 
-// 📊 SAVE LEAD (SEPARATE SHEET)
-async function saveLead(lead) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.GOOGLE_LEADS_SHEET_ID,
-    range: "Sheet1!A:F",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [[
-        lead.name,
-        lead.phone,
-        lead.car,
-        lead.budget,
-        lead.zip,
-        new Date().toLocaleString()
-      ]],
-    },
-  });
-}
-
-// 📩 SEND MESSAGE
+// 📩 SEND
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -90,16 +71,13 @@ async function sendMessage(to, message) {
 }
 
 // 🧠 DETECTION
-const hasCar = (msg) =>
-  /bmw|330|m340|tacoma|toyota|mercedes|tesla|audi|lexus/i.test(msg);
-
 const extractBudget = (msg) => {
   const match = msg.match(/\d{3,4}/);
   return match ? parseInt(match[0]) : null;
 };
 
 const wantsOptions = (msg) =>
-  /what do you have|options|cars|inventory|under/i.test(msg);
+  /what do you have|options|cars|inventory|available|under/i.test(msg);
 
 const isReady = (msg) =>
   /ready|lets do it|lock it|im ready|do it/i.test(msg);
@@ -121,10 +99,6 @@ app.post("/sms", async (req, res) => {
   const budget = extractBudget(lower);
 
   // STORE
-  if (!lead.car && hasCar(lower)) {
-    lead.car = lower;
-  }
-
   if (!lead.budget && budget) {
     lead.budget = budget;
   }
@@ -135,9 +109,9 @@ app.post("/sms", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 🔥 DEAL ENGINE
-  if (lead.car && (wantsOptions(lower) || budget)) {
-    const deals = await getDeals(lead.car, budget);
+  // 🔥 PRIORITY: DEAL SEARCH (FIXED)
+  if (wantsOptions(lower) || budget) {
+    const deals = await getDeals(lead.car || lower, budget);
 
     if (deals.length > 0) {
       let reply = deals
@@ -156,13 +130,13 @@ app.post("/sms", async (req, res) => {
     }
   }
 
-  // 🔥 FUNNEL
+  // 🔥 FUNNEL (ONLY IF NO INTENT)
 
   let reply;
 
   if (lead.stage === "start") {
-    reply = "Hey—what are you looking to get into?";
     lead.stage = "car";
+    reply = "Hey—what are you looking to get into?";
   }
 
   else if (lead.stage === "car") {
@@ -171,15 +145,13 @@ app.post("/sms", async (req, res) => {
 
   else if (lead.stage === "name") {
     lead.name = msg;
-    reply = `Got you ${lead.name}. What area are you in?`;
     lead.stage = "zip";
+    reply = `Got you ${lead.name}. What area are you in?`;
   }
 
   else if (lead.stage === "zip") {
     if (hasZip(lower)) {
       lead.zip = msg;
-
-      await saveLead(lead);
 
       reply = `Perfect—I’ll line something up. Call me and we’ll lock it in.\n\n818-422-2168`;
       lead.stage = "done";
@@ -189,7 +161,7 @@ app.post("/sms", async (req, res) => {
   }
 
   else {
-    reply = "What are you looking to get into?";
+    reply = "Hey—what are you looking to get into?";
   }
 
   await sendMessage(from, reply);
@@ -198,5 +170,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("2-sheet broker system running 🚀");
+  console.log("FIXED deal engine running 🚀");
 });
