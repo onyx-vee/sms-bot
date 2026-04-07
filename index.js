@@ -11,27 +11,27 @@ const sessions = {};
 const APP_LINK = "https://onyxautocollection.com/1745-2/";
 const PHONE = "818-422-2168";
 
-// 🔑 GOOGLE
+// 🔑 GOOGLE AUTH
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-// 🔥 CLEAN
+// 🔥 CLEAN NUMBER
 function cleanNumber(val) {
   if (!val) return null;
   return Number(val.toString().replace(/[^0-9.]/g, ""));
 }
 
-// 🧠 DETECT
+// 🧠 DETECTORS
 function extractBudget(msg) {
   const match = msg.match(/\d{3,4}/);
   return match ? Number(match[0]) : null;
 }
 
 function detectBrand(msg) {
-  const brands = ["toyota","bmw","audi","mercedes","lexus","nissan","honda"];
+  const brands = ["toyota","bmw","audi","mercedes","lexus","nissan","honda","mazda"];
   return brands.find(b => msg.includes(b));
 }
 
@@ -42,8 +42,25 @@ function detectType(msg) {
   return null;
 }
 
+function detectTerm(msg) {
+  const match = msg.match(/(24|36|39|48)/);
+  return match ? match[0] : null;
+}
+
+function detectMiles(msg) {
+  if (/7\.?5|7500/.test(msg)) return "7500";
+  if (/10k|10000/.test(msg)) return "10000";
+  if (/12k|12000/.test(msg)) return "12000";
+  if (/15k|15000/.test(msg)) return "15000";
+  return null;
+}
+
 function isCheapest(msg) {
-  return /cheapest|lowest|least/i.test(msg);
+  return /cheapest|lowest/i.test(msg);
+}
+
+function isBest(msg) {
+  return /best|recommend/i.test(msg);
 }
 
 function wantsAll(msg) {
@@ -54,6 +71,49 @@ function isReady(msg) {
   return /ready|apply|lock|run it/i.test(msg);
 }
 
+// 🧠 PERSONALITY
+function detectPersonality(msg) {
+  if (/price|best|deal|ready|apply|cheapest/.test(msg)) return "buyer";
+  if (/term|miles|details|how/.test(msg)) return "analytical";
+  if (/options|what do you have/.test(msg)) return "explorer";
+  if (/maybe|not sure|thinking/.test(msg)) return "hesitant";
+  return "neutral";
+}
+
+function formatResponse(text, personality) {
+  switch (personality) {
+    case "buyer":
+      return text + "\n\nIf that works, I can lock it in today.";
+    case "analytical":
+      return text + "\n\nWant me to break anything down further?";
+    case "explorer":
+      return text + "\n\nI can narrow this down if you want.";
+    case "hesitant":
+      return text + "\n\nNo rush—happy to walk through it.";
+    default:
+      return text;
+  }
+}
+
+// 🧠 OBJECTIONS
+function detectObjection(msg) {
+  if (/expensive|too much|high/.test(msg)) return "price";
+  if (/shopping|comparing/.test(msg)) return "shopping";
+  if (/wait|later/.test(msg)) return "delay";
+  return null;
+}
+
+function handleObjection(type) {
+  switch (type) {
+    case "price":
+      return "Got it. Are you trying to stay lower monthly or upfront?";
+    case "shopping":
+      return "Makes sense—most options out there won’t beat these numbers.";
+    case "delay":
+      return "All good—just keep in mind programs change month to month.";
+  }
+}
+
 // 🔥 TYPE CLASSIFIER
 function classifyType(model) {
   const m = model.toLowerCase();
@@ -62,7 +122,7 @@ function classifyType(model) {
   return "sedan";
 }
 
-// 📊 GET ROWS
+// 📊 GET DATA
 async function getRows() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
@@ -80,18 +140,23 @@ async function getDeals(filters) {
     const make = row[0]?.toLowerCase();
     const model = row[1]?.toLowerCase();
     const monthly = cleanNumber(row[2]);
+    const term = row[4];
+    const miles = row[5];
 
     if (!monthly) continue;
-
     if (filters.budget && monthly > filters.budget) continue;
     if (filters.brand && !make.includes(filters.brand)) continue;
     if (filters.type && classifyType(model) !== filters.type) continue;
+    if (filters.term && term !== filters.term) continue;
+    if (filters.miles && !miles.includes(filters.miles)) continue;
 
     deals.push({
       make: row[0],
       model: row[1],
       monthly,
       due: row[3],
+      term,
+      miles,
     });
   }
 
@@ -117,7 +182,7 @@ async function sendMessage(to, msg) {
   );
 }
 
-// 🔥 FOLLOW-UP LOOP (FIXED)
+// 🔁 FOLLOW-UP LOOP
 setInterval(async () => {
   const now = Date.now();
 
@@ -127,25 +192,22 @@ setInterval(async () => {
 
     const diff = now - s.lastReply;
 
-    // 15 min
     if (!s.f1 && diff > 15 * 60 * 1000) {
       await sendMessage(user, "Still want me to line something up?");
       s.f1 = true;
     }
 
-    // 2 hr
     if (!s.f2 && diff > 2 * 60 * 60 * 1000) {
       await sendMessage(user, "I can lock something in today if timing works.");
       s.f2 = true;
     }
 
-    // 24 hr
     if (!s.f3 && diff > 24 * 60 * 60 * 1000) {
       await sendMessage(user, "Want me to send a couple strong options?");
       s.f3 = true;
     }
   }
-}, 60 * 1000);
+}, 60000);
 
 // 📩 MAIN
 app.post("/sms", async (req, res) => {
@@ -153,74 +215,70 @@ app.post("/sms", async (req, res) => {
   const from = req.body.number;
 
   if (!sessions[from]) sessions[from] = {};
-  const session = sessions[from];
+  const session = sessions[from;
 
-  // RESET FOLLOWUPS
   session.lastReply = Date.now();
   session.f1 = session.f2 = session.f3 = false;
 
-  // 🔥 CLOSE
-  if (isReady(msg)) {
-    await sendMessage(from, `Run the app here:\n${APP_LINK}`);
-    return res.sendStatus(200);
+  // OBJECTION
+  const objection = detectObjection(msg);
+  if (objection) {
+    return sendMessage(from, handleObjection(objection));
   }
 
-  // 🔥 NEW INTENT (RESET FILTERS)
+  // CLOSE
+  if (isReady(msg)) {
+    return sendMessage(from, `Run the app here:\n${APP_LINK}`);
+  }
+
+  // UPDATE FILTERS
   const budget = extractBudget(msg);
   const brand = detectBrand(msg);
   const type = detectType(msg);
+  const term = detectTerm(msg);
+  const miles = detectMiles(msg);
 
   if (budget) session.budget = budget;
   if (brand) session.brand = brand;
   if (type) session.type = type;
+  if (term) session.term = term;
+  if (miles) session.miles = miles;
 
-  // 🔥 CHEAPEST OVERRIDE
-  if (isCheapest(msg)) {
-    const deals = await getDeals({});
+  const deals = await getDeals(session);
+
+  // BEST
+  if (isBest(msg) && deals.length) {
+    const best = deals[0];
+    return sendMessage(from, `${best.make} ${best.model} — $${best.monthly}/mo`);
+  }
+
+  // CHEAPEST (CONTEXT)
+  if (isCheapest(msg) && deals.length) {
     const d = deals[0];
-
-    await sendMessage(
-      from,
-      `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due\n\nThat’s the lowest deal available right now.`
-    );
-    return res.sendStatus(200);
+    return sendMessage(from, `${d.make} ${d.model} — $${d.monthly}/mo`);
   }
 
-  // 🔥 GET DEALS
-  if (session.budget || session.brand || session.type) {
-    const deals = await getDeals(session);
-    session.deals = deals;
+  // DEAL LIST
+  if (deals.length) {
+    const list = wantsAll(msg) ? deals : deals.slice(0, 3);
 
-    if (deals.length > 0) {
-      const list = wantsAll(msg) ? deals : deals.slice(0, 3);
+    let reply = list.map(d =>
+      `${d.make} ${d.model} — $${d.monthly}/mo (${d.term}mo / ${d.miles})`
+    ).join("\n");
 
-      let reply = list
-        .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due`)
-        .join("\n");
-
-      if (!wantsAll(msg) && deals.length > 3) {
-        reply += `\n\nI’ve got ${deals.length} options. Want the full list?`;
-      }
-
-      reply += `\n\nIf one works, I can lock it in today.`;
-
-      await sendMessage(from, reply);
-      return res.sendStatus(200);
-    }
+    return sendMessage(from, formatResponse(reply, detectPersonality(msg)));
   }
 
-  // 🔥 GREETING
+  // GREETING
   if (!session.started) {
     session.started = true;
-    await sendMessage(from, "What are you looking to get into?");
-    return res.sendStatus(200);
+    return sendMessage(from, "Hey—what are you looking at right now?");
   }
 
-  await sendMessage(from, "Give me a direction and I’ll dial it in.");
-  res.sendStatus(200);
+  return sendMessage(from, "Give me a budget or direction and I’ll dial it in.");
 });
 
 // START
 app.listen(3000, () => {
-  console.log("FULLY FIXED BROKER SYSTEM 🚀");
+  console.log("FINAL SALES SYSTEM LIVE 🚀");
 });
