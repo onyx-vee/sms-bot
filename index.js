@@ -93,7 +93,7 @@ app.post("/sms", async (req, res) => {
 
   const lead = leads[from];
 
-  // 🧠 STORE DATA EARLY
+  // 🧠 STORE DATA EARLY (IMPORTANT FIX)
   if (!lead.car && hasCar(lower)) {
     lead.car = msg;
   }
@@ -102,7 +102,7 @@ app.post("/sms", async (req, res) => {
     lead.budget = msg;
   }
 
-  // 🔥 HANDLE QUESTIONS FIRST (KEY FIX)
+  // 🔥 HANDLE QUESTIONS WITH CONTEXT
   if (isQuestion(lower)) {
     const aiResponse = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -110,17 +110,18 @@ app.post("/sms", async (req, res) => {
         {
           role: "system",
           content: `
-You are a knowledgeable car leasing broker.
+You are a knowledgeable car leasing broker texting a client.
 
-Tone:
-- Casual, confident
-- Not corporate
-- Not robotic
+Known context:
+- Car: ${lead.car || "unknown"}
+- Budget: ${lead.budget || "unknown"}
 
 Rules:
+- If car is known, use it (DO NOT ask again)
 - Answer directly
 - Keep it short
-- Sound like a real person texting
+- Sound natural, not robotic
+- No emojis
 `,
         },
         {
@@ -132,9 +133,9 @@ Rules:
 
     let answer = aiResponse.choices[0].message.content;
 
-    // 👉 Add natural follow-up
+    // 🔥 SMART FOLLOW-UP
     if (!lead.budget) {
-      answer += "\n\nWhere are you trying to land monthly?";
+      answer += "\n\nWhere do you want to be monthly on it?";
     } else if (!lead.name) {
       answer += "\n\nWhat’s your name?";
     }
