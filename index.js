@@ -1,7 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const OpenAI = require("openai");
 const { google } = require("googleapis");
 
 const app = express();
@@ -9,27 +8,22 @@ app.use(express.json());
 
 const leads = {};
 
-// 🔑 OPENAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// 🔑 GOOGLE
+// 🔑 GOOGLE AUTH
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
+
 const sheets = google.sheets({ version: "v4", auth });
 
-// 📊 GET MULTIPLE DEALS
+// 📊 GET DEALS (PRICING SHEET)
 async function getDeals(query, budget) {
   const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEET_ID,
+    spreadsheetId: process.env.GOOGLE_PRICING_SHEET_ID,
     range: "Sheet1!A2:F",
   });
 
-  const rows = res.data.values;
-
+  const rows = res.data.values || [];
   let matches = [];
 
   for (let row of rows) {
@@ -37,17 +31,15 @@ async function getDeals(query, budget) {
     const model = row[1]?.toLowerCase();
     const monthly = parseInt(row[2]);
 
-    const carMatch =
+    const match =
       query &&
       (query.includes(make) ||
         query.includes(model) ||
-        model.includes(query));
+        model.includes(query) ||
+        (query.includes("330") && model.includes("330")));
 
-    const budgetMatch = budget && monthly <= budget;
-
-    if (carMatch || budgetMatch) {
+    if (match || (budget && monthly <= budget)) {
       matches.push({
-        make: row[0],
         model: row[1],
         monthly: row[2],
         due: row[3],
@@ -57,15 +49,14 @@ async function getDeals(query, budget) {
     }
   }
 
-  // limit to top 3
   return matches.slice(0, 3);
 }
 
-// 📊 SAVE LEAD
+// 📊 SAVE LEAD (SEPARATE SHEET)
 async function saveLead(lead) {
   await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: "Sheet1!H:M",
+    spreadsheetId: process.env.GOOGLE_LEADS_SHEET_ID,
+    range: "Sheet1!A:F",
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
@@ -80,7 +71,7 @@ async function saveLead(lead) {
   });
 }
 
-// 📩 SEND
+// 📩 SEND MESSAGE
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -100,21 +91,21 @@ async function sendMessage(to, message) {
 
 // 🧠 DETECTION
 const hasCar = (msg) =>
-  /bmw|3 series|330i|m340|tacoma|toyota|mercedes|tesla|audi|lexus/i.test(msg);
+  /bmw|330|m340|tacoma|toyota|mercedes|tesla|audi|lexus/i.test(msg);
 
 const extractBudget = (msg) => {
   const match = msg.match(/\d{3,4}/);
   return match ? parseInt(match[0]) : null;
 };
 
-const hasZip = (msg) =>
-  /\b\d{5}\b/.test(msg);
+const wantsOptions = (msg) =>
+  /what do you have|options|cars|inventory|under/i.test(msg);
 
 const isReady = (msg) =>
   /ready|lets do it|lock it|im ready|do it/i.test(msg);
 
-const wantsOptions = (msg) =>
-  /what do you have|options|cars|inventory|under/i.test(msg);
+const hasZip = (msg) =>
+  /\b\d{5}\b/.test(msg);
 
 // 📩 MAIN
 app.post("/sms", async (req, res) => {
@@ -127,9 +118,9 @@ app.post("/sms", async (req, res) => {
   }
 
   const lead = leads[from];
-
   const budget = extractBudget(lower);
 
+  // STORE
   if (!lead.car && hasCar(lower)) {
     lead.car = lower;
   }
@@ -144,19 +135,16 @@ app.post("/sms", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 🔥 DEAL SEARCH (CORE FEATURE)
-  if (lead.car || wantsOptions(lower) || budget) {
-    const deals = await getDeals(lead.car || lower, budget);
+  // 🔥 DEAL ENGINE
+  if (lead.car && (wantsOptions(lower) || budget)) {
+    const deals = await getDeals(lead.car, budget);
 
     if (deals.length > 0) {
       let reply = deals
-        .map(
-          (d) =>
-            `${d.model} — ${d.monthly}/mo, ${d.due} due (${d.term}/${d.miles})`
-        )
+        .map(d => `${d.model} — ${d.monthly}/mo, ${d.due} due`)
         .join("\n");
 
-      reply += "\n\nThese are the strongest ones right now.";
+      reply += "\n\nThese are the strongest options right now.";
 
       if (!lead.name) {
         reply += "\n\nWhat’s your name?";
@@ -210,5 +198,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("Deal engine running 🚀");
+  console.log("2-sheet broker system running 🚀");
 });
