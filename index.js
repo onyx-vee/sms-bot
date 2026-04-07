@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const OpenAI = require("openai");
 const { google } = require("googleapis");
 
 const app = express();
@@ -8,30 +9,33 @@ app.use(express.json());
 
 const leads = {};
 
-// 🔑 GOOGLE
+// 🔑 OPENAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// 🔑 GOOGLE AUTH
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
+
 const sheets = google.sheets({ version: "v4", auth });
 
-// 🔥 CLEAN NUMBER FUNCTION
+// 🔥 CLEAN NUMBER
 function cleanNumber(val) {
   if (!val) return null;
   return parseInt(val.toString().replace(/[^0-9]/g, ""));
 }
 
-// 📊 GET DEALS (FIXED)
+// 📊 GET DEALS (PRICING)
 async function getDeals(query, budget) {
   const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_PRICING_SHEET_ID,
+    spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
     range: "Sheet1!A2:F",
   });
 
   const rows = res.data.values || [];
-
-  console.log("📊 SHEET ROWS:", rows); // DEBUG
-
   let matches = [];
 
   for (let row of rows) {
@@ -49,8 +53,9 @@ async function getDeals(query, budget) {
 
     if (carMatch || budgetMatch) {
       matches.push({
+        make: row[0],
         model: row[1],
-        monthly: monthly,
+        monthly,
         due: row[3],
         term: row[4],
         miles: row[5],
@@ -58,9 +63,30 @@ async function getDeals(query, budget) {
     }
   }
 
-  console.log("🔥 MATCHES:", matches); // DEBUG
-
   return matches.slice(0, 3);
+}
+
+// 📊 SAVE LEAD
+async function saveLead(lead) {
+  if (lead.saved) return;
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: "1u_BwXG8zcGnlhnx6GyMBsFMYffphq0K2jbdsHMJOglg",
+    range: "Sheet1!A:F",
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[
+        lead.name || "",
+        lead.phone || "",
+        lead.car || "",
+        lead.budget || "",
+        lead.zip || "",
+        new Date().toLocaleString()
+      ]],
+    },
+  });
+
+  lead.saved = true;
 }
 
 // 📩 SEND
@@ -87,11 +113,46 @@ const extractBudget = (msg) => {
   return match ? parseInt(match[0]) : null;
 };
 
-const wantsOptions = (msg) =>
-  /what do you have|options|cars|inventory|available|under/i.test(msg);
+const extractZip = (msg) => {
+  const match = msg.match(/\b\d{5}\b/);
+  return match ? match[0] : null;
+};
 
 const isReady = (msg) =>
-  /ready|lets do it|lock it|im ready|do it/i.test(msg);
+  /ready|lets do it|lock it|im ready/i.test(msg);
+
+const isQuestion = (msg) =>
+  /what|which|how|trims|available|down|monthly|payment/i.test(msg);
+
+// 🤖 AI RESPONSE
+async function aiReply(context, userMsg) {
+  const res = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      {
+        role: "system",
+        content: `
+You are a high-end car broker.
+
+Tone:
+- Natural
+- Confident
+- Human
+- No corporate language
+- Short
+
+Guide the conversation naturally.
+`,
+      },
+      {
+        role: "user",
+        content: `Context:\n${context}\n\nUser: ${userMsg}`,
+      },
+    ],
+  });
+
+  return res.choices[0].message.content;
+}
 
 // 📩 MAIN
 app.post("/sms", async (req, res) => {
@@ -100,40 +161,69 @@ app.post("/sms", async (req, res) => {
   const from = req.body.number;
 
   if (!leads[from]) {
-    leads[from] = { stage: "start", phone: from };
+    leads[from] = { phone: from };
   }
 
   const lead = leads[from];
-  const budget = extractBudget(lower);
 
-  // 🔥 HARD CLOSE
+  // 🔥 PASSIVE DATA CAPTURE
+  const budget = extractBudget(lower);
+  const zip = extractZip(lower);
+
+  if (budget) lead.budget = budget;
+  if (zip) lead.zip = zip;
+
+  if (!lead.name && /^[a-zA-Z]{2,}$/.test(msg)) {
+    lead.name = msg;
+  }
+
+  if (!lead.car && /bmw|330|m340|tacoma|tesla|audi/i.test(lower)) {
+    lead.car = msg;
+  }
+
+  // 🔥 CLOSE
   if (isReady(lower)) {
-    await sendMessage(from, `Perfect—call me now and I’ll lock this in.\n\n818-422-2168`);
+    await sendMessage(from, `Perfect—call me now and I’ll lock it in.\n\n818-422-2168`);
     return res.sendStatus(200);
   }
 
-  // 🔥 DEAL ENGINE (FIXED)
-  if (wantsOptions(lower) || budget) {
+  // 🔥 DEALS
+  if (budget || isQuestion(lower)) {
     const deals = await getDeals(lower, budget);
 
     if (deals.length > 0) {
-      let reply = deals
+      let dealText = deals
         .map(d => `${d.model} — $${d.monthly}/mo, ${d.due} due`)
         .join("\n");
 
-      reply += "\n\nThese are the strongest options right now.";
+      let reply = await aiReply(dealText, msg);
+
+      // 🔥 SOFT LEAD PROMPTS
+      if (!lead.name) {
+        reply += "\n\nWhat’s your name?";
+      } else if (!lead.zip) {
+        reply += "\n\nWhat area are you in?";
+      }
 
       await sendMessage(from, reply);
+
+      // 🔥 SAVE WHEN READY
+      if (lead.name && (lead.car || lead.budget)) {
+        await saveLead(lead);
+      }
+
       return res.sendStatus(200);
     }
   }
 
-  // 🔥 FALLBACK (CLEAN)
-  await sendMessage(from, "Hey—what are you looking to get into?");
+  // 🔥 NORMAL AI
+  const reply = await aiReply("", msg);
+  await sendMessage(from, reply);
+
   res.sendStatus(200);
 });
 
 // START
 app.listen(3000, () => {
-  console.log("FIXED sheet parsing running 🚀");
+  console.log("SMART broker system running 🚀");
 });
