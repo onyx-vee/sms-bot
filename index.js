@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const OpenAI = require("openai");
 const { google } = require("googleapis");
 
 const app = express();
@@ -8,7 +9,12 @@ app.use(express.json());
 
 const leads = {};
 
-// 🔑 GOOGLE SETUP
+// 🔑 OPENAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// 🔑 GOOGLE
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -33,6 +39,38 @@ async function saveLead(lead) {
       ]],
     },
   });
+}
+
+// 🤖 AI POLISH (TONE ONLY)
+async function aiReply(context, message) {
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      {
+        role: "system",
+        content: `
+You are a high-end car leasing broker from Onyx Auto Collection.
+
+Tone:
+- Calm, confident, slightly selective
+- Conversational, not robotic
+- No emojis
+- No corporate language
+
+Rules:
+- Max 2 sentences
+- Never sound needy
+- Always sound like you do deals daily
+`,
+      },
+      {
+        role: "user",
+        content: `${context}\n\nRewrite this naturally:\n${message}`,
+      },
+    ],
+  });
+
+  return response.choices[0].message.content;
 }
 
 // 📩 SEND
@@ -72,9 +110,11 @@ app.post("/sms", async (req, res) => {
   const lower = msg.toLowerCase();
   const from = req.body.number;
 
+  // RESET
   if (resetIntent(lower)) {
     leads[from] = { stage: "start" };
-    await sendMessage(from, "What are you looking to get into?");
+    const reply = await aiReply("", "Hey—what’s up. What are you looking to get into right now?");
+    await sendMessage(from, reply);
     return res.sendStatus(200);
   }
 
@@ -83,38 +123,38 @@ app.post("/sms", async (req, res) => {
   }
 
   const lead = leads[from];
-  let reply;
+  let baseReply;
 
-  // 🔥 FUNNEL
+  // 🔥 CONTROLLED FUNNEL
 
   if (lead.stage === "start") {
-    reply = "What are you looking to get into?";
+    baseReply = "Hey—what’s up. What are you looking to get into right now?";
     lead.stage = "car";
   }
 
   else if (lead.stage === "car") {
     if (hasCar(lower)) {
       lead.car = msg;
-      reply = "Solid choice. Where do you want to be monthly?";
+      baseReply = "Got it. What are you leaning toward?";
       lead.stage = "budget";
     } else {
-      reply = "What car are you thinking?";
+      baseReply = "What are you leaning toward?";
     }
   }
 
   else if (lead.stage === "budget") {
     if (hasBudget(lower)) {
       lead.budget = msg;
-      reply = "Got it. What’s your name?";
+      baseReply = "That works. What’s your name?";
       lead.stage = "name";
     } else {
-      reply = "What monthly payment are you trying to stay around?";
+      baseReply = "Where do you want to be monthly on it?";
     }
   }
 
   else if (lead.stage === "name") {
     lead.name = msg;
-    reply = "What zip code are you in?";
+    baseReply = `Got you ${lead.name}. What area are you in?`;
     lead.stage = "zip";
   }
 
@@ -122,20 +162,24 @@ app.post("/sms", async (req, res) => {
     if (hasZip(lower)) {
       lead.zip = msg;
 
-      // 💾 SAVE TO SHEET
       await saveLead(lead);
 
-      reply = `Perfect. I’ll line up the best options in your area.\n\nCall me and I’ll walk you through it.\n\n818-422-2168`;
-
+      baseReply = "I’ll line something up that makes sense. Call me when you’re free and we’ll lock it in.";
       lead.stage = "done";
     } else {
-      reply = "What zip code are you in?";
+      baseReply = "What zip code are you in?";
     }
   }
 
   else {
-    reply = "Text me when you're ready and I’ll take care of it.";
+    baseReply = "Text me when you're ready and I’ll take care of it.";
   }
+
+  // 🤖 AI POLISH
+  const reply = await aiReply(
+    `Customer: ${msg}\nCar: ${lead.car}\nBudget: ${lead.budget}`,
+    baseReply
+  );
 
   await sendMessage(from, reply);
   res.sendStatus(200);
@@ -143,5 +187,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("Lead capture bot running 🚀");
+  console.log("Onyx AI broker running 🚀");
 });
