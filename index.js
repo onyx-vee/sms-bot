@@ -14,47 +14,87 @@ const auth = new google.auth.GoogleAuth({
 
 const sheets = google.sheets({ version: "v4", auth });
 
+// 🧠 SESSION MEMORY
+const sessions = {};
+
 // 🔥 CLEAN NUMBER
 function cleanNumber(val) {
   if (!val) return null;
   return Number(val.toString().replace(/[^0-9.]/g, ""));
 }
 
-// 🧠 DETECT
+// 🧠 DETECTION
 function extractBudget(msg) {
   const match = msg.match(/\d{3,4}/);
   return match ? Number(match[0]) : null;
 }
 
-function wantsAll(msg) {
-  return /all|everything|list|more/i.test(msg);
+function detectBrand(msg) {
+  const brands = ["bmw","audi","mercedes","toyota","lexus","tesla","acura","honda","hyundai"];
+  return brands.find(b => msg.includes(b));
 }
 
-// 📊 GET DEALS
-async function getDeals(budget) {
+function detectType(msg) {
+  if (msg.includes("suv")) return "suv";
+  if (msg.includes("truck")) return "truck";
+  if (msg.includes("sedan")) return "sedan";
+  return null;
+}
+
+function isLuxury(msg) {
+  return /luxury|premium/i.test(msg);
+}
+
+function wantsAll(msg) {
+  return /all|everything|list|more|send it/i.test(msg);
+}
+
+// 🔥 CLASSIFY VEHICLE TYPE FROM MODEL
+function classifyType(model) {
+  const m = model.toLowerCase();
+
+  if (/x\d|rx|nx|crv|rav4|cx|escape|pilot|highlander|kona|tiguan/.test(m)) return "suv";
+  if (/truck|tacoma|f150|silverado|ram/.test(m)) return "truck";
+  return "sedan";
+}
+
+// 🔥 LUXURY BRANDS
+const luxuryBrands = ["bmw","audi","mercedes","lexus"];
+
+// 📊 GET DEALS WITH FILTERING
+async function getDeals(filters) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
     range: "Sheet1!A2:F",
   });
 
   const rows = res.data.values || [];
-
   let matches = [];
 
   for (let row of rows) {
+    const make = row[0]?.toLowerCase();
+    const model = row[1]?.toLowerCase();
     const monthly = cleanNumber(row[2]);
 
-    if (monthly && monthly <= budget) {
-      matches.push({
-        make: row[0],
-        model: row[1],
-        monthly,
-        due: row[3],
-      });
-    }
+    if (!monthly) continue;
+
+    // 🔥 FILTERS
+    if (filters.budget && monthly > filters.budget) continue;
+
+    if (filters.brand && !make.includes(filters.brand)) continue;
+
+    if (filters.type && classifyType(model) !== filters.type) continue;
+
+    if (filters.luxury && !luxuryBrands.includes(make)) continue;
+
+    matches.push({
+      make: row[0],
+      model: row[1],
+      monthly,
+      due: row[3],
+    });
   }
 
-  // 🔥 SORT CHEAPEST FIRST (IMPORTANT)
   matches.sort((a, b) => a.monthly - b.monthly);
 
   return matches;
@@ -84,48 +124,68 @@ app.post("/sms", async (req, res) => {
   const lower = msg.toLowerCase();
   const from = req.body.number;
 
-  const budget = extractBudget(lower);
+  if (!sessions[from]) sessions[from] = {};
+  const session = sessions[from];
 
-  if (budget) {
-    const deals = await getDeals(budget);
+  // 🔥 DETECT FILTERS
+  const budget = extractBudget(lower);
+  const brand = detectBrand(lower);
+  const type = detectType(lower);
+  const luxury = isLuxury(lower);
+
+  if (budget) session.budget = budget;
+  if (brand) session.brand = brand;
+  if (type) session.type = type;
+  if (luxury) session.luxury = true;
+
+  // 🔥 SHOW ALL
+  if (wantsAll(lower) && session.deals) {
+    const reply = session.deals
+      .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due at signing`)
+      .join("\n");
+
+    await sendMessage(from, reply + `\n\nThat’s everything that fits.`);
+    return res.sendStatus(200);
+  }
+
+  // 🔥 GET DEALS
+  if (session.budget || session.brand || session.type || session.luxury) {
+    const deals = await getDeals(session);
+
+    session.deals = deals;
 
     if (deals.length > 0) {
-      const showAll = wantsAll(lower);
+      const top3 = deals.slice(0, 3);
 
-      const list = showAll ? deals : deals.slice(0, 3);
-
-      let reply = list
+      let reply = top3
         .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due at signing`)
         .join("\n");
 
-      // 🔥 DIFFERENT ENDINGS
-      if (!showAll && deals.length > 3) {
-        reply += `\n\nI’ve got ${deals.length} total options under $${budget}. Want me to send the full list?`;
-      } else {
-        reply += `\n\nThese are everything I have under $${budget} right now.`;
+      if (deals.length > 3) {
+        reply += `\n\nI’ve got ${deals.length} options like this—want me to send the full list?`;
       }
 
       await sendMessage(from, reply);
       return res.sendStatus(200);
+    } else {
+      await sendMessage(from, "Nothing solid with that exact combo—but I can adjust it. Want me to take a look?");
+      return res.sendStatus(200);
     }
-
-    await sendMessage(from, "Nothing strong under that exact number, but I can get close—want me to check?");
-    return res.sendStatus(200);
   }
 
   // 🔥 GREETING
-  if (!global.started) {
-    global.started = true;
+  if (!session.started) {
+    session.started = true;
     await sendMessage(from, "Hey—what are you looking to get into?");
     return res.sendStatus(200);
   }
 
   // 🔥 FALLBACK
-  await sendMessage(from, "Got you—what kind of car are you thinking?");
+  await sendMessage(from, "Got you—give me an idea of budget or type and I’ll narrow it down.");
   res.sendStatus(200);
 });
 
 // START
 app.listen(3000, () => {
-  console.log("SMART DEAL LISTING RUNNING 🚀");
+  console.log("SMART BROKER FILTER SYSTEM 🚀");
 });
