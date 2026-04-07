@@ -19,7 +19,6 @@ const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
-
 const sheets = google.sheets({ version: "v4", auth });
 
 // 📊 SAVE LEAD
@@ -41,39 +40,7 @@ async function saveLead(lead) {
   });
 }
 
-// 🤖 AI POLISH (TONE ONLY)
-async function aiReply(context, message) {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages: [
-      {
-        role: "system",
-        content: `
-You are a high-end car leasing broker from Onyx Auto Collection.
-
-Tone:
-- Calm, confident, slightly selective
-- Conversational, not robotic
-- No emojis
-- No corporate language
-
-Rules:
-- Max 2 sentences
-- Never sound needy
-- Always sound like you do deals daily
-`,
-      },
-      {
-        role: "user",
-        content: `${context}\n\nRewrite this naturally:\n${message}`,
-      },
-    ],
-  });
-
-  return response.choices[0].message.content;
-}
-
-// 📩 SEND
+// 📩 SEND MESSAGE
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -101,10 +68,13 @@ const hasBudget = (msg) =>
 const hasZip = (msg) =>
   /\b\d{5}\b/.test(msg);
 
+const isQuestion = (msg) =>
+  /what|which|how|do you|can you|available|trims|models|options|inventory/i.test(msg);
+
 const resetIntent = (msg) =>
   /start over|restart/i.test(msg);
 
-// 📩 MAIN
+// 📩 MAIN ROUTE
 app.post("/sms", async (req, res) => {
   const msg = req.body.content;
   const lower = msg.toLowerCase();
@@ -113,8 +83,7 @@ app.post("/sms", async (req, res) => {
   // RESET
   if (resetIntent(lower)) {
     leads[from] = { stage: "start" };
-    const reply = await aiReply("", "Hey—what’s up. What are you looking to get into right now?");
-    await sendMessage(from, reply);
+    await sendMessage(from, "Hey—what’s up. What are you looking to get into?");
     return res.sendStatus(200);
   }
 
@@ -123,38 +92,87 @@ app.post("/sms", async (req, res) => {
   }
 
   const lead = leads[from];
-  let baseReply;
 
-  // 🔥 CONTROLLED FUNNEL
+  // 🧠 STORE DATA EARLY
+  if (!lead.car && hasCar(lower)) {
+    lead.car = msg;
+  }
+
+  if (!lead.budget && hasBudget(lower)) {
+    lead.budget = msg;
+  }
+
+  // 🔥 HANDLE QUESTIONS FIRST (KEY FIX)
+  if (isQuestion(lower)) {
+    const aiResponse = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a knowledgeable car leasing broker.
+
+Tone:
+- Casual, confident
+- Not corporate
+- Not robotic
+
+Rules:
+- Answer directly
+- Keep it short
+- Sound like a real person texting
+`,
+        },
+        {
+          role: "user",
+          content: msg,
+        },
+      ],
+    });
+
+    let answer = aiResponse.choices[0].message.content;
+
+    // 👉 Add natural follow-up
+    if (!lead.budget) {
+      answer += "\n\nWhere are you trying to land monthly?";
+    } else if (!lead.name) {
+      answer += "\n\nWhat’s your name?";
+    }
+
+    await sendMessage(from, answer);
+    return res.sendStatus(200);
+  }
+
+  let reply;
+
+  // 🔥 FUNNEL FLOW
 
   if (lead.stage === "start") {
-    baseReply = "Hey—what’s up. What are you looking to get into right now?";
+    reply = "Hey—what’s up. What are you looking to get into?";
     lead.stage = "car";
   }
 
   else if (lead.stage === "car") {
-    if (hasCar(lower)) {
-      lead.car = msg;
-      baseReply = "Got it. What are you leaning toward?";
+    if (lead.car) {
+      reply = "Got it. Where do you want to be monthly on it?";
       lead.stage = "budget";
     } else {
-      baseReply = "What are you leaning toward?";
+      reply = "What are you leaning toward?";
     }
   }
 
   else if (lead.stage === "budget") {
-    if (hasBudget(lower)) {
-      lead.budget = msg;
-      baseReply = "That works. What’s your name?";
+    if (lead.budget) {
+      reply = "That works. What’s your name?";
       lead.stage = "name";
     } else {
-      baseReply = "Where do you want to be monthly on it?";
+      reply = "Where do you want to be monthly?";
     }
   }
 
   else if (lead.stage === "name") {
     lead.name = msg;
-    baseReply = `Got you ${lead.name}. What area are you in?`;
+    reply = `Got you ${lead.name}. What area are you in?`;
     lead.stage = "zip";
   }
 
@@ -164,28 +182,22 @@ app.post("/sms", async (req, res) => {
 
       await saveLead(lead);
 
-      baseReply = "I’ll line something up that makes sense. Call me when you’re free and we’ll lock it in.";
+      reply = "Perfect. I’ll line something up that makes sense. Call me when you’re free and we’ll lock it in.";
       lead.stage = "done";
     } else {
-      baseReply = "What zip code are you in?";
+      reply = "What zip code are you in?";
     }
   }
 
   else {
-    baseReply = "Text me when you're ready and I’ll take care of it.";
+    reply = "Text me when you're ready and I’ll take care of it.";
   }
-
-  // 🤖 AI POLISH
-  const reply = await aiReply(
-    `Customer: ${msg}\nCar: ${lead.car}\nBudget: ${lead.budget}`,
-    baseReply
-  );
 
   await sendMessage(from, reply);
   res.sendStatus(200);
 });
 
-// START
+// START SERVER
 app.listen(3000, () => {
-  console.log("Onyx AI broker running 🚀");
+  console.log("Onyx broker bot running 🚀");
 });
