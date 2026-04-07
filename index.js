@@ -21,11 +21,51 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
+// 📊 GET MULTIPLE DEALS
+async function getDeals(query, budget) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEET_ID,
+    range: "Sheet1!A2:F",
+  });
+
+  const rows = res.data.values;
+
+  let matches = [];
+
+  for (let row of rows) {
+    const make = row[0]?.toLowerCase();
+    const model = row[1]?.toLowerCase();
+    const monthly = parseInt(row[2]);
+
+    const carMatch =
+      query &&
+      (query.includes(make) ||
+        query.includes(model) ||
+        model.includes(query));
+
+    const budgetMatch = budget && monthly <= budget;
+
+    if (carMatch || budgetMatch) {
+      matches.push({
+        make: row[0],
+        model: row[1],
+        monthly: row[2],
+        due: row[3],
+        term: row[4],
+        miles: row[5],
+      });
+    }
+  }
+
+  // limit to top 3
+  return matches.slice(0, 3);
+}
+
 // 📊 SAVE LEAD
 async function saveLead(lead) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: "Sheet1!A:F",
+    range: "Sheet1!H:M",
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
@@ -40,7 +80,7 @@ async function saveLead(lead) {
   });
 }
 
-// 📩 SEND MESSAGE
+// 📩 SEND
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -60,32 +100,27 @@ async function sendMessage(to, message) {
 
 // 🧠 DETECTION
 const hasCar = (msg) =>
-  /bmw|m340|m3|m4|tacoma|toyota|mercedes|tesla|audi|lexus/i.test(msg);
+  /bmw|3 series|330i|m340|tacoma|toyota|mercedes|tesla|audi|lexus/i.test(msg);
 
-const hasBudget = (msg) =>
-  /\d{3,4}/.test(msg);
+const extractBudget = (msg) => {
+  const match = msg.match(/\d{3,4}/);
+  return match ? parseInt(match[0]) : null;
+};
 
 const hasZip = (msg) =>
   /\b\d{5}\b/.test(msg);
 
-const isQuestion = (msg) =>
-  /what|which|how|do you|can you|available|trims|models|options|inventory/i.test(msg);
+const isReady = (msg) =>
+  /ready|lets do it|lock it|im ready|do it/i.test(msg);
 
-const resetIntent = (msg) =>
-  /start over|restart/i.test(msg);
+const wantsOptions = (msg) =>
+  /what do you have|options|cars|inventory|under/i.test(msg);
 
-// 📩 MAIN ROUTE
+// 📩 MAIN
 app.post("/sms", async (req, res) => {
   const msg = req.body.content;
   const lower = msg.toLowerCase();
   const from = req.body.number;
-
-  // RESET
-  if (resetIntent(lower)) {
-    leads[from] = { stage: "start" };
-    await sendMessage(from, "Hey—what’s up. What are you looking to get into?");
-    return res.sendStatus(200);
-  }
 
   if (!leads[from]) {
     leads[from] = { stage: "start", phone: from };
@@ -93,82 +128,57 @@ app.post("/sms", async (req, res) => {
 
   const lead = leads[from];
 
-  // 🧠 STORE DATA EARLY (IMPORTANT FIX)
+  const budget = extractBudget(lower);
+
   if (!lead.car && hasCar(lower)) {
-    lead.car = msg;
+    lead.car = lower;
   }
 
-  if (!lead.budget && hasBudget(lower)) {
-    lead.budget = msg;
+  if (!lead.budget && budget) {
+    lead.budget = budget;
   }
 
-  // 🔥 HANDLE QUESTIONS WITH CONTEXT
-  if (isQuestion(lower)) {
-    const aiResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a knowledgeable car leasing broker texting a client.
-
-Known context:
-- Car: ${lead.car || "unknown"}
-- Budget: ${lead.budget || "unknown"}
-
-Rules:
-- If car is known, use it (DO NOT ask again)
-- Answer directly
-- Keep it short
-- Sound natural, not robotic
-- No emojis
-`,
-        },
-        {
-          role: "user",
-          content: msg,
-        },
-      ],
-    });
-
-    let answer = aiResponse.choices[0].message.content;
-
-    // 🔥 SMART FOLLOW-UP
-    if (!lead.budget) {
-      answer += "\n\nWhere do you want to be monthly on it?";
-    } else if (!lead.name) {
-      answer += "\n\nWhat’s your name?";
-    }
-
-    await sendMessage(from, answer);
+  // 🔥 HARD CLOSE
+  if (isReady(lower)) {
+    await sendMessage(from, `Perfect—call me now and I’ll lock this in.\n\n818-422-2168`);
     return res.sendStatus(200);
   }
 
+  // 🔥 DEAL SEARCH (CORE FEATURE)
+  if (lead.car || wantsOptions(lower) || budget) {
+    const deals = await getDeals(lead.car || lower, budget);
+
+    if (deals.length > 0) {
+      let reply = deals
+        .map(
+          (d) =>
+            `${d.model} — ${d.monthly}/mo, ${d.due} due (${d.term}/${d.miles})`
+        )
+        .join("\n");
+
+      reply += "\n\nThese are the strongest ones right now.";
+
+      if (!lead.name) {
+        reply += "\n\nWhat’s your name?";
+        lead.stage = "name";
+      }
+
+      await sendMessage(from, reply);
+      return res.sendStatus(200);
+    }
+  }
+
+  // 🔥 FUNNEL
+
   let reply;
 
-  // 🔥 FUNNEL FLOW
-
   if (lead.stage === "start") {
-    reply = "Hey—what’s up. What are you looking to get into?";
+    reply = "Hey—what are you looking to get into?";
     lead.stage = "car";
   }
 
   else if (lead.stage === "car") {
-    if (lead.car) {
-      reply = "Got it. Where do you want to be monthly on it?";
-      lead.stage = "budget";
-    } else {
-      reply = "What are you leaning toward?";
-    }
-  }
-
-  else if (lead.stage === "budget") {
-    if (lead.budget) {
-      reply = "That works. What’s your name?";
-      lead.stage = "name";
-    } else {
-      reply = "Where do you want to be monthly?";
-    }
+    reply = "What are you thinking?";
   }
 
   else if (lead.stage === "name") {
@@ -183,7 +193,7 @@ Rules:
 
       await saveLead(lead);
 
-      reply = "Perfect. I’ll line something up that makes sense. Call me when you’re free and we’ll lock it in.";
+      reply = `Perfect—I’ll line something up. Call me and we’ll lock it in.\n\n818-422-2168`;
       lead.stage = "done";
     } else {
       reply = "What zip code are you in?";
@@ -191,14 +201,14 @@ Rules:
   }
 
   else {
-    reply = "Text me when you're ready and I’ll take care of it.";
+    reply = "What are you looking to get into?";
   }
 
   await sendMessage(from, reply);
   res.sendStatus(200);
 });
 
-// START SERVER
+// START
 app.listen(3000, () => {
-  console.log("Onyx broker bot running 🚀");
+  console.log("Deal engine running 🚀");
 });
