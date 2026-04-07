@@ -28,7 +28,7 @@ function cleanNumber(val) {
   return parseInt(val.toString().replace(/[^0-9]/g, ""));
 }
 
-// 📊 GET DEALS
+// 📊 GET DEALS (FIXED LOGIC)
 async function getDeals(query, budget) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
@@ -37,8 +37,6 @@ async function getDeals(query, budget) {
 
   const rows = res.data.values || [];
 
-  console.log("📊 SHEET ROWS:", rows);
-
   let matches = [];
 
   for (let row of rows) {
@@ -46,15 +44,26 @@ async function getDeals(query, budget) {
     const model = row[1]?.toLowerCase();
     const monthly = cleanNumber(row[2]);
 
-    const carMatch =
+    // 🔥 PRIORITY: BUDGET MATCH
+    if (budget && monthly && monthly <= budget) {
+      matches.push({
+        make: row[0],
+        model: row[1],
+        monthly,
+        due: row[3],
+        term: row[4],
+        miles: row[5],
+      });
+      continue;
+    }
+
+    // 🔥 SECONDARY: CAR MATCH
+    if (
       query &&
       (query.includes(make) ||
         query.includes(model) ||
-        model.includes(query));
-
-    const budgetMatch = budget && monthly && monthly <= budget;
-
-    if (carMatch || budgetMatch) {
+        model.includes(query))
+    ) {
       matches.push({
         make: row[0],
         model: row[1],
@@ -66,35 +75,10 @@ async function getDeals(query, budget) {
     }
   }
 
-  console.log("🔥 MATCHES:", matches);
-
   return matches.slice(0, 3);
 }
 
-// 📊 SAVE LEAD
-async function saveLead(lead) {
-  if (lead.saved) return;
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: "1u_BwXG8zcGnlhnx6GyMBsFMYffphq0K2jbdsHMJOglg",
-    range: "Sheet1!A:F",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [[
-        lead.name || "",
-        lead.phone || "",
-        lead.car || "",
-        lead.budget || "",
-        lead.zip || "",
-        new Date().toLocaleString()
-      ]],
-    },
-  });
-
-  lead.saved = true;
-}
-
-// 📩 SEND MESSAGE
+// 📩 SEND
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -118,16 +102,11 @@ const extractBudget = (msg) => {
   return match ? parseInt(match[0]) : null;
 };
 
-const extractZip = (msg) => {
-  const match = msg.match(/\b\d{5}\b/);
-  return match ? match[0] : null;
-};
+const wantsDeals = (msg) =>
+  /what do you have|options|cars|inventory|available|under/i.test(msg);
 
 const isReady = (msg) =>
   /ready|lets do it|lock it|im ready/i.test(msg);
-
-const wantsDeals = (msg) =>
-  /what do you have|options|cars|inventory|available|under/i.test(msg);
 
 // 🤖 AI RESPONSE
 async function aiReply(context, userMsg) {
@@ -144,12 +123,12 @@ Tone:
 - Confident
 - Human
 - No fluff
-- No corporate language
+- Short responses
 `,
       },
       {
         role: "user",
-        content: `Context:\n${context}\n\nUser: ${userMsg}`,
+        content: `Deals:\n${context}\n\nUser: ${userMsg}`,
       },
     ],
   });
@@ -157,32 +136,7 @@ Tone:
   return res.choices[0].message.content;
 }
 
-// 🧪 TEST ROUTE (CRITICAL)
-app.get("/test-pricing", async (req, res) => {
-  try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
-      range: "Sheet1!A2:F",
-    });
-
-    const rows = response.data.values;
-
-    console.log("✅ RAW SHEET DATA:", rows);
-
-    res.json({
-      success: true,
-      rows: rows,
-    });
-  } catch (err) {
-    console.error("❌ SHEET ERROR:", err.message);
-    res.json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-
-// 📩 MAIN SMS
+// 📩 MAIN
 app.post("/sms", async (req, res) => {
   const msg = req.body.content;
   const lower = msg.toLowerCase();
@@ -192,14 +146,7 @@ app.post("/sms", async (req, res) => {
     leads[from] = { phone: from };
   }
 
-  const lead = leads[from];
-
-  // 🔥 CAPTURE
   const budget = extractBudget(lower);
-  const zip = extractZip(lower);
-
-  if (budget) lead.budget = budget;
-  if (zip) lead.zip = zip;
 
   // 🔥 CLOSE
   if (isReady(lower)) {
@@ -207,7 +154,7 @@ app.post("/sms", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 🔥 DEAL ENGINE (PRIORITY)
+  // 🔥 DEAL ENGINE (NOW ALWAYS WORKS)
   if (wantsDeals(lower) || budget) {
     const deals = await getDeals(lower, budget);
 
@@ -216,7 +163,7 @@ app.post("/sms", async (req, res) => {
         .map(d => `${d.model} — $${d.monthly}/mo, ${d.due} due`)
         .join("\n");
 
-      let reply = await aiReply(dealText, msg);
+      const reply = await aiReply(dealText, msg);
 
       await sendMessage(from, reply);
       return res.sendStatus(200);
@@ -224,13 +171,11 @@ app.post("/sms", async (req, res) => {
   }
 
   // 🔥 FALLBACK
-  const reply = await aiReply("", msg);
-  await sendMessage(from, reply);
-
+  await sendMessage(from, "Hey—what are you looking to get into?");
   res.sendStatus(200);
 });
 
 // START
 app.listen(3000, () => {
-  console.log("FINAL broker system running 🚀");
+  console.log("FINAL FIXED broker running 🚀");
 });
