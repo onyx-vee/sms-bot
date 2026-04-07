@@ -20,6 +20,16 @@ function cleanNumber(val) {
   return Number(val.toString().replace(/[^0-9.]/g, ""));
 }
 
+// 🧠 DETECT
+function extractBudget(msg) {
+  const match = msg.match(/\d{3,4}/);
+  return match ? Number(match[0]) : null;
+}
+
+function wantsAll(msg) {
+  return /all|everything|list|more/i.test(msg);
+}
+
 // 📊 GET DEALS
 async function getDeals(budget) {
   const res = await sheets.spreadsheets.values.get({
@@ -28,6 +38,7 @@ async function getDeals(budget) {
   });
 
   const rows = res.data.values || [];
+
   let matches = [];
 
   for (let row of rows) {
@@ -43,7 +54,10 @@ async function getDeals(budget) {
     }
   }
 
-  return matches.slice(0, 3);
+  // 🔥 SORT CHEAPEST FIRST (IMPORTANT)
+  matches.sort((a, b) => a.monthly - b.monthly);
+
+  return matches;
 }
 
 // 📩 SEND
@@ -70,29 +84,36 @@ app.post("/sms", async (req, res) => {
   const lower = msg.toLowerCase();
   const from = req.body.number;
 
-  const budgetMatch = lower.match(/\d{3,4}/);
-  const budget = budgetMatch ? Number(budgetMatch[0]) : null;
+  const budget = extractBudget(lower);
 
-  // 🔥 DEALS
   if (budget) {
     const deals = await getDeals(budget);
 
     if (deals.length > 0) {
-      let reply = deals
+      const showAll = wantsAll(lower);
+
+      const list = showAll ? deals : deals.slice(0, 3);
+
+      let reply = list
         .map(d => `${d.make} ${d.model} — $${d.monthly}/mo with ${d.due} due at signing`)
         .join("\n");
 
-      reply += "\n\nThese are solid options right now—want me to narrow it down for you?";
+      // 🔥 DIFFERENT ENDINGS
+      if (!showAll && deals.length > 3) {
+        reply += `\n\nI’ve got ${deals.length} total options under $${budget}. Want me to send the full list?`;
+      } else {
+        reply += `\n\nThese are everything I have under $${budget} right now.`;
+      }
 
       await sendMessage(from, reply);
       return res.sendStatus(200);
-    } else {
-      await sendMessage(from, "Nothing strong under that exact number, but I can get close—want me to check?");
-      return res.sendStatus(200);
     }
+
+    await sendMessage(from, "Nothing strong under that exact number, but I can get close—want me to check?");
+    return res.sendStatus(200);
   }
 
-  // 🔥 FIRST MESSAGE
+  // 🔥 GREETING
   if (!global.started) {
     global.started = true;
     await sendMessage(from, "Hey—what are you looking to get into?");
@@ -106,5 +127,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("CLEAN BROKER BOT RUNNING 🚀");
+  console.log("SMART DEAL LISTING RUNNING 🚀");
 });
