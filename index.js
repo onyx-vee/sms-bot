@@ -28,7 +28,7 @@ function cleanNumber(val) {
   return parseInt(val.toString().replace(/[^0-9]/g, ""));
 }
 
-// 📊 GET DEALS (PRICING)
+// 📊 GET DEALS
 async function getDeals(query, budget) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
@@ -36,6 +36,9 @@ async function getDeals(query, budget) {
   });
 
   const rows = res.data.values || [];
+
+  console.log("📊 SHEET ROWS:", rows);
+
   let matches = [];
 
   for (let row of rows) {
@@ -63,6 +66,8 @@ async function getDeals(query, budget) {
     }
   }
 
+  console.log("🔥 MATCHES:", matches);
+
   return matches.slice(0, 3);
 }
 
@@ -89,7 +94,7 @@ async function saveLead(lead) {
   lead.saved = true;
 }
 
-// 📩 SEND
+// 📩 SEND MESSAGE
 async function sendMessage(to, message) {
   await axios.post(
     "https://api.sendblue.co/api/send-message",
@@ -121,8 +126,8 @@ const extractZip = (msg) => {
 const isReady = (msg) =>
   /ready|lets do it|lock it|im ready/i.test(msg);
 
-const isQuestion = (msg) =>
-  /what|which|how|trims|available|down|monthly|payment/i.test(msg);
+const wantsDeals = (msg) =>
+  /what do you have|options|cars|inventory|available|under/i.test(msg);
 
 // 🤖 AI RESPONSE
 async function aiReply(context, userMsg) {
@@ -138,10 +143,8 @@ Tone:
 - Natural
 - Confident
 - Human
+- No fluff
 - No corporate language
-- Short
-
-Guide the conversation naturally.
 `,
       },
       {
@@ -154,7 +157,32 @@ Guide the conversation naturally.
   return res.choices[0].message.content;
 }
 
-// 📩 MAIN
+// 🧪 TEST ROUTE (CRITICAL)
+app.get("/test-pricing", async (req, res) => {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: "1TiMawK8HCbb-qqmxv0M09oJ6w3Zx-BWKIni7JVFAnTg",
+      range: "Sheet1!A2:F",
+    });
+
+    const rows = response.data.values;
+
+    console.log("✅ RAW SHEET DATA:", rows);
+
+    res.json({
+      success: true,
+      rows: rows,
+    });
+  } catch (err) {
+    console.error("❌ SHEET ERROR:", err.message);
+    res.json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+// 📩 MAIN SMS
 app.post("/sms", async (req, res) => {
   const msg = req.body.content;
   const lower = msg.toLowerCase();
@@ -166,20 +194,12 @@ app.post("/sms", async (req, res) => {
 
   const lead = leads[from];
 
-  // 🔥 PASSIVE DATA CAPTURE
+  // 🔥 CAPTURE
   const budget = extractBudget(lower);
   const zip = extractZip(lower);
 
   if (budget) lead.budget = budget;
   if (zip) lead.zip = zip;
-
-  if (!lead.name && /^[a-zA-Z]{2,}$/.test(msg)) {
-    lead.name = msg;
-  }
-
-  if (!lead.car && /bmw|330|m340|tacoma|tesla|audi/i.test(lower)) {
-    lead.car = msg;
-  }
 
   // 🔥 CLOSE
   if (isReady(lower)) {
@@ -187,8 +207,8 @@ app.post("/sms", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 🔥 DEALS
-  if (budget || isQuestion(lower)) {
+  // 🔥 DEAL ENGINE (PRIORITY)
+  if (wantsDeals(lower) || budget) {
     const deals = await getDeals(lower, budget);
 
     if (deals.length > 0) {
@@ -198,25 +218,12 @@ app.post("/sms", async (req, res) => {
 
       let reply = await aiReply(dealText, msg);
 
-      // 🔥 SOFT LEAD PROMPTS
-      if (!lead.name) {
-        reply += "\n\nWhat’s your name?";
-      } else if (!lead.zip) {
-        reply += "\n\nWhat area are you in?";
-      }
-
       await sendMessage(from, reply);
-
-      // 🔥 SAVE WHEN READY
-      if (lead.name && (lead.car || lead.budget)) {
-        await saveLead(lead);
-      }
-
       return res.sendStatus(200);
     }
   }
 
-  // 🔥 NORMAL AI
+  // 🔥 FALLBACK
   const reply = await aiReply("", msg);
   await sendMessage(from, reply);
 
@@ -225,5 +232,5 @@ app.post("/sms", async (req, res) => {
 
 // START
 app.listen(3000, () => {
-  console.log("SMART broker system running 🚀");
+  console.log("FINAL broker system running 🚀");
 });
